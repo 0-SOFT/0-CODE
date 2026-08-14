@@ -1,0 +1,30 @@
+{
+  "$comment": "A portable, secret-free fragment of ~/.claude/settings.json. provision-toolset.sh deep-merges it into your personal settings without overwriting existing keys. There are NO secrets and no mcpServers here — MCP servers are installed separately from config/mcp-manifest.json.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write(*.py)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ruff format \"$CLAUDE_FILE_PATH\"",
+            "timeout": 15000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE '\\b(pip|pip3)\\s+install\\b'; then echo 'BLOCKED: Use uv instead of pip' >&2; exit 2; fi; if echo \"$CLAUDE_TOOL_INPUT\" | grep -qE 'rm\\s+-rf\\s+/[^a-zA-Z]'; then echo 'BLOCKED: rm -rf / is forbidden' >&2; exit 2; fi; if echo \"$CLAUDE_TOOL_INPUT\" | grep -qiE 'taskkill.*/+IM.*(claude|node)\\.exe'; then echo 'BLOCKED: global taskkill /IM claude.exe|node.exe kills EVERY Claude Code session machine-wide. Target a specific PID instead.' >&2; exit 2; fi; if echo \"$CLAUDE_TOOL_INPUT\" | grep -qiE '\\b(pkill|killall)\\b.*(claude|node)([^a-zA-Z]|$)'; then echo 'BLOCKED: pkill/killall claude|node kills all sessions. Target a specific PID instead.' >&2; exit 2; fi"
+          }
+        ]
+      }
+    ]
+  },
+  "effortLevel": "xhigh",
+  "agentPushNotifEnabled": true
+}

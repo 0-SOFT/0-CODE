@@ -1,0 +1,46 @@
+# Secrets — never commit these.
+.env
+.env.local
+.env.*.local
+config/.env
+*.secret
+*.key
+*.pem
+
+# Session transcripts. They contain everything the agent read during a session,
+# including the contents of secret files — this is a proven leak channel, not a
+# theoretical one. Durable records of the loop's work belong in docs/reports/.
+docs/logs/
+
+# Loop runtime state: it describes a process, not the project.
+docs/.loop.lock
+docs/.loop-children
+docs/STATE.md.bak.*
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.bak
+*.bak.*
+*~
+*.log
+
+# Operating system and editors
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.code-workspace
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/

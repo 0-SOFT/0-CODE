@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# ralph-loop-stop — a thin wrapper around the Stop hook.
+#
+# All the logic lives in ralph-loop-stop.mjs (Node.js, no jq/bc dependencies, insensitive to line
+# endings). The wrapper is kept for compatibility with the proven call chain run-hook.cmd → bash
+# (which locates Git Bash on Windows and works around the PowerShell stdin bug). stdin is passed to
+# node through exec.
+
+set -uo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+exec node "$DIR/ralph-loop-stop.mjs"

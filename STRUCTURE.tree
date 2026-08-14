@@ -1,0 +1,99 @@
+0-CODE/                                     # An autonomous development loop for Claude Code and OpenCode.
+│                                           # Zero runtime dependencies: everything here is Node built-ins,
+│                                           # bash and git. Nothing is installed to make it work.
+│
+├── README.md                               # Landing page: what this is, install, safety, honest limits.
+├── QUICKSTART.md                           # Zero to the first autonomous commit.
+├── GUIDELINE.md                            # Architecture and mechanics — and why each decision was made.
+├── CHANGELOG.md                            # Release history, written around what was learned.
+├── PLUGIN_README.md                        # Installing globally as a Claude Code plugin.
+├── CLAUDE_CODE_SETUP.md                    # Notes on the surrounding Claude Code tooling.
+├── CONTRIBUTING.md                         # How to work on this project.
+├── SECURITY.md                             # Reporting vulnerabilities.
+├── STRUCTURE.tree                          # This file.
+├── LICENSE                                 # MIT.
+│
+├── bootstrap.sh / bootstrap.ps1            # Deploy the framework into a target project.
+│                                           # --backend claude|opencode selects the engine and provisions it.
+│                                           # Idempotent: a second run reports "already installed".
+│
+├── provision-toolset.sh / .ps1             # Deploy your personal toolset (skills, MCP servers, global hooks)
+│                                           # onto a new machine. --dry-run, --verify, --force.
+│
+├── core/                                   # The agent-independent core. Everything here is pure logic or
+│   │                                       # a thin adapter; nothing here knows which CLI it is talking to.
+│   │
+│   ├── gates.mjs                           # Should the loop continue? Four stop conditions: a blocker,
+│   │                                       # released == current, the iteration cap, the budget cap.
+│   │                                       # A pure function — both loop drivers share it.
+│   ├── supervisor.mjs                      # The external loop driver (used by OpenCode; optional for Claude).
+│   │                                       # Lock, self-check, turn, retries, progress, state update.
+│   ├── loop-lock.mjs                       # One loop per project. A live owner refuses a second launch;
+│   │                                       # a dead one is taken over, because a crash must not stop autonomy.
+│   ├── turn-retry.mjs                      # Transient failure or real error? A retry only makes sense when
+│   │                                       # repeating the same action has a chance.
+│   ├── preflight.mjs                       # One tiny turn before the loop: catches a changed output format
+│   │                                       # and a misconfiguration that would masquerade as a hiccup.
+│   ├── progress.mjs                        # Did the turn actually change anything (git, working tree, state)?
+│   ├── safety.mjs                          # The four irreversible-command rules. THE single rule source
+│   │                                       # for every engine.
+│   ├── permissions-policy.mjs              # The single permission policy. The `ask` category does not exist
+│   │                                       # here — it outranks every mode and guarantees a prompt.
+│   ├── permission-decision.mjs             # The arbiter: allow what is safe, deny what is irreversible.
+│   ├── secret-notice.mjs                   # Notices secrets in a commit. Never blocks — by design.
+│   ├── model-routing.mjs                   # Which model for which kind of step; presets per backend.
+│   ├── backend-factory.mjs                 # Picks the backend from an explicit flag. No magic.
+│   │
+│   └── backends/
+│       ├── Backend.mjs                     # The port: the contract every engine adapter implements.
+│       ├── claude.mjs                      # Claude Code / Claude CLI.
+│       ├── opencode.mjs                    # OpenCode with any OpenRouter model.
+│       └── spawn-cli.mjs                   # Cross-platform process launch, process groups, orphan cleanup,
+│                                           # and the silence timeout. The most experience-dense file here.
+│
+├── hooks/                                  # What Claude Code calls at specific moments.
+│   ├── ralph-loop-stop(.mjs)               # The Stop hook: the loop driver inside a live session.
+│   ├── safety-guard(.mjs)                  # The PreToolUse arbiter: an explicit decision on every tool call.
+│   ├── save-session-log                    # Saves session transcripts into docs/logs/ for forensics.
+│   ├── run-hook.cmd                        # A bash/cmd polyglot: finds Git Bash on Windows.
+│   └── hooks.json                          # Hook declarations for plugin mode.
+│
+├── lib/                                    # Small utilities with no dependencies.
+│   ├── yaml-mini.mjs                       # The YAML parser and serialiser for STATE.md. One source of truth.
+│   ├── parse-state.mjs                     # Read the frontmatter, print JSON.
+│   ├── update-state.mjs                    # Atomic deep-merge of a JSON patch (backup, temp file, rename).
+│   ├── backup.mjs / state-backup.mjs       # A ring buffer of five backups before every write.
+│   └── telegram-notify.sh / .ps1           # Notifications. The token lives in the URL, so nothing is echoed.
+│
+├── tools/
+│   ├── gen-settings.mjs                    # Generates both settings files from the single policy.
+│   │                                       # --check fails if either drifted.
+│   ├── doctor-permissions.mjs              # "Why am I being asked for permission?" — names the cause.
+│   └── provision-opencode.mjs              # Prepares an OpenCode project: config, instructions, guard plugin.
+│
+├── templates/                              # Read from the framework directory; NOT copied into projects.
+│   ├── project-CLAUDE.md                   # The instructions a target project receives.
+│   ├── project-settings.json               # Generated from core/permissions-policy.mjs — never edit by hand.
+│   └── pm2-ecosystem.json                  # Optional process-manager config for unattended runs.
+│
+├── config/
+│   ├── mcp-manifest.example.json           # The format for a secret-free MCP registry. Copy and edit.
+│   ├── mcp-manifest.schema.json            # Its schema.
+│   └── global-settings.template.json       # A portable fragment of ~/.claude/settings.json. No secrets.
+│
+├── docs/
+│   ├── PROVEN.md                           # What was verified by experiment, with numbers and limits.
+│   ├── failure-modes.md                    # What breaks, how it looks, what to do. All observed, not imagined.
+│   └── schemas/                            # JSON Schema for STATE.md and the capability catalogue.
+│
+├── skills/orchestrator-wrapper/SKILL.md    # The contract the agent follows on every iteration:
+│                                           # read state → pick the stage → do one step → update state.
+│
+└── tests/                                  # 230 tests plus 117 smoke checks. No test framework — the project
+    │                                       # is zero-dependency including its tooling.
+    ├── run.mjs                             # Runner over node --test with a coverage gate.
+    ├── smoke.sh                            # End-to-end checks: hooks, gates, bootstrap, provisioning, guards.
+    ├── unit/                               # Pure functions: gates, safety, parsing, routing, retries, lock.
+    ├── integration/                        # Hooks, the supervisor, adapters, settings consistency.
+    ├── e2e/                                # Full paths through real processes.
+    └── helpers/                            # Shared fixtures.

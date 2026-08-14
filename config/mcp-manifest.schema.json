@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "mcp-manifest.json — a secret-free MCP registry used for provisioning",
+  "type": "object",
+  "required": ["schema_version", "servers"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "scope": { "type": "string", "enum": ["user", "project"] },
+    "description": { "type": "string" },
+    "servers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "type": { "type": "string", "enum": ["stdio", "http"] },
+          "command": { "type": "string" },
+          "args": { "type": "array", "items": { "type": "string" } },
+          "env": { "type": "object", "additionalProperties": { "type": "string" } },
+          "url": { "type": "string" },
+          "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+          "secrets": { "type": "array", "items": { "type": "string" } },
+          "portable": { "type": "boolean" },
+          "needs_setup": { "type": "boolean" },
+          "source": { "type": "string", "enum": ["local", "claude_ai"] },
+          "linux_setup": { "type": "string" },
+          "note": { "type": "string" }
+        }
+      }
+    }
+  }
+}

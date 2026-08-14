@@ -1,0 +1,39 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # jq is used by the session logger hook; the smoke suite checks for it.
+      - name: Install jq (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Unit and integration tests, with a coverage gate over source modules
+        run: node tests/run.mjs --coverage-min=80
+
+      # Git Bash is present on the Windows runner; the hooks require bash on both platforms.
+      - name: End-to-end smoke checks
+        shell: bash
+        run: bash tests/smoke.sh
+
+      # A settings file that drifted from the single policy source is a defect, not a style issue.
+      - name: Settings match the policy
+        run: node tools/gen-settings.mjs --check

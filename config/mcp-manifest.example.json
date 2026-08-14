@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "scope": "user",
+  "description": "A secret-free MCP registry for reproducing your toolset on a new machine. Secret VALUES are never stored here — only ${VAR} placeholders, which provision-toolset.sh substitutes from config/.env (gitignored). Copy this file to config/mcp-manifest.json and edit it to match the servers you actually use.",
+  "servers": [
+    {
+      "name": "context7",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "portable": true,
+      "source": "npm",
+      "note": "Library documentation lookup. No secrets."
+    },
+    {
+      "name": "playwright",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "portable": true,
+      "source": "npm",
+      "note": "Browser automation (headless). No secrets."
+    },
+    {
+      "name": "memory",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory@latest"],
+      "portable": true,
+      "source": "npm",
+      "note": "A knowledge graph the agent can write to and read back. No secrets."
+    },
+    {
+      "name": "sequential-thinking",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "portable": true,
+      "source": "npm",
+      "note": "Structured step-by-step reasoning. No secrets."
+    },
+    {
+      "name": "github",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" },
+      "portable": true,
+      "source": "npm",
+      "note": "Issues, pull requests, code search. Needs a token with the scopes you intend to use. The VALUE lives in config/.env, never here."
+    },
+    {
+      "name": "an-oauth-connector",
+      "source": "claude_ai",
+      "portable": true,
+      "needs_setup": true,
+      "note": "Connectors that authenticate interactively cannot be provisioned from a manifest. They are listed so the catalogue is complete, and skipped during provisioning."
+    },
+    {
+      "name": "a-python-server",
+      "type": "stdio",
+      "command": "${PYTHON_VENV}/bin/python",
+      "args": ["-m", "some_mcp_server"],
+      "portable": false,
+      "linux_setup": "uv venv ~/.local/venvs/example --python 3.12 && uv pip install --python ~/.local/venvs/example/bin/python some-mcp-server",
+      "note": "Not portable out of the box: the interpreter path differs per machine. `linux_setup` documents how to prepare it; provisioning reports it instead of pretending it worked."
+    }
+  ]
+}

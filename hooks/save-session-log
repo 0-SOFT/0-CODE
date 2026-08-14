@@ -1,0 +1,181 @@
+#!/bin/bash
+# =============================================================================
+# your-project Session Logger Hook
+# =============================================================================
+# Automatically saves the full Claude Code session transcript into docs/logs/ after every reply
+# (the Stop event) and at the end of the session (SessionEnd).
+#
+# Log layout:
+#   docs/logs/
+#     YYYY-MM-DD/
+#       <session_id>.jsonl          — the full transcript (all messages plus tool calls)
+#       <session_id>.summary.md     — a human-readable summary (prompts, replies, tool calls)
+#
+# The hook receives JSON on stdin from Claude Code with the fields:
+#   session_id, transcript_path, cwd, hook_event_name, last_assistant_message
+#
+# A canonical framework artefact (v0.5.6+): bootstrap copies it to
+# <project>/hooks/save-session-log and registers it in .claude/settings.json (Stop + SessionEnd)
+# through run-hook.cmd. The name has NO extension so that Windows auto-detection does not prepend
+# an extra `bash` (the same reason as for ralph-loop-stop).
+# Developers of the target project need to do nothing — the hook works on its own.
+#
+# Dependencies: jq (for parsing JSON and generating the summary)
+#   Windows: download https://github.com/jqlang/jq/releases → ~/bin/jq.exe
+#   Linux/Mac: sudo apt install jq / brew install jq
+# =============================================================================
+
+set -euo pipefail
+
+# --- Locate jq (it may live in a non-standard place on Windows) ---
+JQ=""
+for candidate in jq "$HOME/bin/jq" "$HOME/bin/jq.exe" "/mingw64/bin/jq.exe"; do
+  if command -v "$candidate" &>/dev/null; then
+    JQ="$candidate"
+    break
+  fi
+done
+
+if [ -z "$JQ" ]; then
+  # Without jq we cannot parse the input — exit silently
+  exit 0
+fi
+
+# --- Read the input from Claude Code ---
+INPUT=$(cat)
+
+TRANSCRIPT=$(echo "$INPUT" | "$JQ" -r '.transcript_path // empty')
+SESSION_ID=$(echo "$INPUT" | "$JQ" -r '.session_id // empty')
+EVENT=$(echo "$INPUT" | "$JQ" -r '.hook_event_name // empty')
+CWD=$(echo "$INPUT" | "$JQ" -r '.cwd // empty')
+
+# No transcript or no session_id — exit silently
+if [ -z "$TRANSCRIPT" ] || [ -z "$SESSION_ID" ]; then
+  exit 0
+fi
+
+# Normalise the path for Windows (Git Bash / MSYS2)
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+  TRANSCRIPT=$(cygpath -u "$TRANSCRIPT" 2>/dev/null || echo "$TRANSCRIPT")
+  CWD=$(cygpath -u "$CWD" 2>/dev/null || echo "$CWD")
+fi
+
+# Check that the transcript file exists
+if [ ! -f "$TRANSCRIPT" ]; then
+  exit 0
+fi
+
+# --- Determine the project directory ---
+# CLAUDE_PROJECT_DIR = the project root (stable); the working directory may be a subdirectory
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-${CWD:-$(pwd)}}"
+
+# --- Create the log directory ---
+DATE=$(date +%Y-%m-%d)
+TIME=$(date +%H-%M-%S)
+LOG_DIR="${PROJECT_DIR}/docs/logs/${DATE}"
+mkdir -p "$LOG_DIR"
+
+# --- A short id for convenience (first 8 characters) ---
+SHORT_ID="${SESSION_ID:0:8}"
+
+# --- Work out the name: look for an existing log for this session ---
+# (Stop fires several times per session — we update the same file)
+EXISTING=$(find "$LOG_DIR" -name "*_${SHORT_ID}.jsonl" 2>/dev/null | head -1)
+
+if [ -n "$EXISTING" ]; then
+  LOG_BASE=$(basename "$EXISTING" .jsonl)
+else
+  LOG_BASE="${TIME}_${SHORT_ID}"
+fi
+
+# --- Copy the full JSONL transcript ---
+DEST_JSONL="${LOG_DIR}/${LOG_BASE}.jsonl"
+cp "$TRANSCRIPT" "$DEST_JSONL"
+
+# --- Generate the human-readable summary ---
+DEST_SUMMARY="${LOG_DIR}/${LOG_BASE}.summary.md"
+
+{
+  echo "# Session Log: ${SHORT_ID}"
+  echo ""
+  echo "- **Date:** ${DATE} ${TIME//-/:}"
+  echo "- **Session:** \`${SESSION_ID}\`"
+  echo "- **Event:** ${EVENT}"
+  echo "- **Project:** ${PROJECT_DIR}"
+  echo ""
+  echo "---"
+  echo ""
+
+  # Extract the full dialogue: user messages, assistant text, tool calls, tool results
+  # JSONL structure: .type = "user"|"assistant"|"tool_result"|...
+  # Messages: .message = {role, content: [{type, text/name/input}], ...}
+  # Content is at .message.content[] (not .message[] directly)
+  "$JQ" -r '
+    # Helper: extract content array from message object
+    def msg_content:
+      if (.message | type) == "object" and (.message.content | type) == "array" then .message.content
+      elif (.message | type) == "array" then .message
+      elif (.content | type) == "array" then .content
+      else []
+      end;
+
+    # Helper: format tool use block
+    def format_tool:
+      "\n### \ud83d\udd27 Tool: `" + .name + "`\n\n" +
+      if .name == "Bash" then
+        "```bash\n" + (.input.command // "(no command)") + "\n```"
+      elif .name == "Read" then
+        "\ud83d\udcd6 Read: `" + (.input.file_path // "?") + "`"
+      elif .name == "Write" then
+        "\ud83d\udcdd Write: `" + (.input.file_path // "?") + "` (" + ((.input.content // "") | length | tostring) + " chars)"
+      elif .name == "Edit" then
+        "\u270f\ufe0f Edit: `" + (.input.file_path // "?") + "`"
+      elif .name == "Glob" then
+        "\ud83d\udcc2 Glob: `" + (.input.pattern // "?") + "`"
+      elif .name == "Grep" then
+        "\ud83d\udd0d Grep: `" + (.input.pattern // "?") + "`"
+      elif .name == "Agent" then
+        "\ud83e\udd16 Agent: " + (.input.description // (.input.prompt // "?") | .[0:100])
+      else
+        "Input: " + (.input | tostring | .[0:200])
+      end;
+
+    if .type == "user" then
+      (
+        [msg_content[] | select(.type == "text") | .text] | join("\n")
+      ) | if . != "" then "\n## \ud83d\udc64 User\n\n" + . else empty end
+
+    elif .type == "assistant" then
+      (
+        # Text blocks
+        ([msg_content[] | select(.type == "text") | .text] | join("\n")
+         | if . != "" then "\n## \ud83e\udd16 Assistant\n\n" + . else "" end)
+        +
+        # Tool use blocks
+        ([msg_content[] | select(.type == "tool_use") | format_tool] | join("\n"))
+      ) | if . != "" then . else empty end
+
+    elif .type == "tool_result" then
+      (
+        if (.content | type) == "string" then .content
+        elif (.content | type) == "array" then
+          [.content[] | select(.type == "text") | .text] | join("\n")
+        else ""
+        end
+      ) | if . != "" then
+        "\n<details><summary>\ud83d\udccb Result (" + (length | tostring) + " chars)</summary>\n\n```\n" + (.[0:500]) + (if length > 500 then "\n... (" + (length | tostring) + " chars total)" else "" end) + "\n```\n</details>"
+      else empty
+      end
+
+    else empty
+    end
+  ' "$TRANSCRIPT" 2>/dev/null || echo "(failed to parse transcript)"
+
+} > "$DEST_SUMMARY"
+
+# --- Rotation: delete logs older than 30 days ---
+find "${PROJECT_DIR}/docs/logs/" -name "*.jsonl" -mtime +30 -delete 2>/dev/null || true
+find "${PROJECT_DIR}/docs/logs/" -name "*.summary.md" -mtime +30 -delete 2>/dev/null || true
+find "${PROJECT_DIR}/docs/logs/" -type d -empty -delete 2>/dev/null || true
+
+exit 0

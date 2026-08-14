@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# safety-guard — a thin wrapper around the PreToolUse hook.
+#
+# All the logic lives in safety-guard.mjs (Node.js, no dependencies, insensitive to line endings).
+# The wrapper is kept for compatibility with the run-hook.cmd → bash chain (which locates Git Bash
+# on Windows and works around the PowerShell stdin bug). stdin is passed to node through exec.
+
+set -uo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+exec node "$DIR/safety-guard.mjs"

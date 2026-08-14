@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "tools-catalog.json — a catalogue of MCP capabilities",
+  "description": "A persistent registry of available MCP servers and their capabilities. The orchestrator reads it during planning and re-checks it before raising any blocker.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "mcps"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "updated_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "ISO-8601 timestamp of the last catalogue update, or null."
+    },
+    "mcps": {
+      "type": "array",
+      "description": "The list of known MCP servers.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The MCP server name as it appears in `claude mcp list` (for example github, playwright)."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "connected",
+              "available",
+              "unknown"
+            ],
+            "description": "connected — attached and visible to the session; available — configured or known but not attached right now; unknown — mentioned but unverified."
+          },
+          "purpose": {
+            "type": "string",
+            "description": "One line: what the server is for, in human-readable form."
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Key capabilities or tools (for example search_code, create_pull_request)."
+          },
+          "how_to_connect": {
+            "type": "string",
+            "description": "How to attach it if it is not connected (for example a `claude mcp add ...` command or a link)."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "server_instructions",
+              "mcp_list",
+              "manual",
+              "stage0"
+            ],
+            "description": "Where the description came from: platform server instructions, `claude mcp list`, or the user."
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+# Нормализация концов строк — критично для кросс-платформенности (находка P0-003).
+# bash-скрипты и Node.js ДОЛЖНЫ храниться с LF: иначе при checkout на Windows с
+# core.autocrlf=true они получают CRLF, и на Linux/macOS shebang ломается
+# (`#!/usr/bin/env bash\r` → `bash: bad interpreter: No such file or directory`).
+
+* text=auto eol=lf
+
+# Скрипты и данные — всегда LF
+*.sh        text eol=lf
+*.mjs       text eol=lf
+*.js        text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+# Stop-хук без расширения — явное правило
+ralph-loop-stop text eol=lf
+
+# Windows-специфичные обёртки — CRLF
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+*.bat       text eol=crlf
+
+# Бинарные файлы — без нормализации
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary

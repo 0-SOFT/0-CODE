@@ -1,0 +1,184 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "STATE.md frontmatter — Claude Code Autonomous Framework",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "project_name",
+    "current_stage",
+    "current_version",
+    "blockers",
+    "session_count",
+    "iteration",
+    "max_iterations"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Schema version of STATE.md frontmatter format."
+    },
+    "project_name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable project identifier."
+    },
+    "current_stage": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4,
+      "description": "0 = goal-setting, 1 = planning, 2 = execution, 3 = audits, 4 = testing."
+    },
+    "current_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version of the currently active project version."
+    },
+    "previous_version": {
+      "type": ["string", "null"],
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "current_prompt_index": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "current_prompt_file": {
+      "type": ["string", "null"]
+    },
+    "last_action_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "last_action": {
+      "type": ["string", "null"]
+    },
+    "last_session_id": {
+      "type": ["string", "null"],
+      "description": "Captured from Claude Code session for --resume after crash."
+    },
+    "blockers": {
+      "type": "array",
+      "description": "Real blockers preventing autonomous progress.",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["missing_resource", "ambiguity", "stuck", "budget_exceeded", "manual_request", "other"]
+          },
+          "what": { "type": "string" },
+          "required_by": { "type": "string" },
+          "options": { "type": "array" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "open_findings": {
+      "type": "array",
+      "description": "P0-P3 issues not yet closed (populated by audit stages)."
+    },
+    "audit_cycle": {
+      "type": ["string", "null"],
+      "enum": ["architecture", "tests", "frontend", "codebase", null]
+    },
+    "verification_pending": { "type": "boolean" },
+    "session_count": { "type": "integer", "minimum": 0 },
+    "iteration": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Ralph Loop iteration counter (incremented by Stop-hook)."
+    },
+    "max_iterations": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Cap on Ralph Loop iterations before forced stop + alert."
+    },
+    "attempts_per_task": {
+      "type": "object",
+      "description": "Tracks 3-strikes blocker heuristic per task ID.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "count": { "type": "integer", "minimum": 0 },
+          "strategies": { "type": "array", "items": { "type": "string" } },
+          "last_diff_lines": { "type": "integer" },
+          "new_failure_mode_last_attempt": { "type": "boolean" },
+          "completed": { "type": "boolean", "description": "Set after successful commit. Eligible for GC after 30 days." },
+          "completed_at": { "type": ["string", "null"], "format": "date-time" }
+        }
+      }
+    },
+    "progress_metrics": {
+      "type": "object",
+      "properties": {
+        "last_3_sessions_diff_lines": { "type": "array", "items": { "type": "integer" } },
+        "last_3_sessions_test_diff": { "type": "array", "items": { "type": "integer" } }
+      }
+    },
+    "budget_metrics": {
+      "type": "object",
+      "properties": {
+        "version_cost_usd": { "type": "number", "minimum": 0 },
+        "cap_usd": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "released_version": {
+      "type": ["string", "null"],
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Set when project reaches release. Stop-hook returns clean exit + Telegram."
+    },
+    "next_step_prompt": {
+      "type": ["string", "null"],
+      "description": "Text fed back to Claude on Ralph Loop continuation."
+    },
+    "roadmap_version": { "type": "string" },
+    "tz_version": { "type": "string" },
+    "framework_version": {
+      "type": "string",
+      "description": "Version of the autonomous framework that bootstrapped this project."
+    },
+    "versions_since_last_audit": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Counter incremented on each completed version. Stage 3 auto-triggers when >= 10."
+    },
+    "required_tools": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Names of MCP servers and tools REQUIRED for the project. The pre-flight check compares them against `claude mcp list`; a missing requirement produces a missing_resource blocker."
+    },
+    "stage0_answers": {
+      "type": "object",
+      "description": "Answers collected from user during Stage 0 (goal-setting). Populated by orchestrator-wrapper v0.0.3+.",
+      "properties": {
+        "scope": {
+          "type": "object",
+          "properties": {
+            "goal": { "type": "string" },
+            "mvp": { "type": "string" },
+            "test_case": { "type": "string" },
+            "deadline": { "type": "string" }
+          }
+        },
+        "tools": {
+          "type": "object",
+          "properties": {
+            "stack": { "type": "string" },
+            "mcps": { "type": "array", "items": { "type": "string" } },
+            "external_apis": { "type": "string" },
+            "credentials_needed": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "process": {
+          "type": "object",
+          "properties": {
+            "models": { "type": "string" },
+            "alerts": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

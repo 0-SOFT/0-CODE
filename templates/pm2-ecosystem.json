@@ -1,0 +1,20 @@
+{
+  "apps": [
+    {
+      "name": "claude-autonomous-__PROJECT_NAME__",
+      "script": "claude",
+      "args": ["-p", "Read docs/STATE.md and docs/ROADMAP.md, then carry out next_step_prompt — one Ralph Loop iteration.", "--continue"],
+      "interpreter": "none",
+      "restart_delay": 5000,
+      "max_restarts": 20,
+      "kill_timeout": 10000,
+      "stop_exit_codes": [0],
+      "out_file": "./docs/logs/pm2-out.log",
+      "error_file": "./docs/logs/pm2-error.log",
+      "merge_logs": true,
+      "env": {
+        "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP": "1000"
+      }
+    }
+  ]
+}

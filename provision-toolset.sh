@@ -92,10 +92,17 @@ do_verify() {
   for b in node npm npx python python3 uv uvx ruff git; do
     if command -v "$b" >/dev/null 2>&1; then echo "    [ok] $b"; else echo "    [missing] $b"; fi
   done
-  # manus venv
-  local manus_py; manus_py="$(grep -E '^MANUS_PYTHON=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)"
-  if [ -n "$manus_py" ] && [ -x "$manus_py" ]; then echo "    🟢 manus python: $manus_py"
-  else echo "    [setup] manus: the virtualenv is not configured (see linux_setup in the manifest, MANUS_PYTHON in config/.env)"; fi
+  # Python MCP servers ship as console scripts (uv tool install <pkg> --with 'mcp<2').
+  # The pin is required: these packages declare an open-ended mcp>=1.x, and SDK 2.0.0 dropped
+  # both Server.list_tools and mcp.server.fastmcp, so an unpinned install dies on startup.
+  local v name bin
+  for v in TWOCAPTCHA_MCP_BIN MANUS_MCP_BIN EMAIL_MCP_BIN; do
+    name="$(printf '%s' "${v%_MCP_BIN}" | tr '[:upper:]' '[:lower:]')"
+    bin="$(grep -E "^$v=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d ' \r' || true)"
+    [ -n "$bin" ] || bin="$name-mcp"
+    if [ -x "$bin" ] || command -v "$bin" >/dev/null 2>&1; then echo "    🟢 $name: $bin"
+    else echo "    [setup] $name: console script not found — run: uv tool install $name-mcp --with 'mcp<2' (or point $v at it in config/.env)"; fi
+  done
   echo "  Hint: install the missing runtime, fill in config/.env, or log in to claude."
 }
 

@@ -19,6 +19,10 @@ import { dirname, join } from 'node:path';
 import { parseYaml } from '../lib/yaml-mini.mjs';
 import { decideContinuation } from '../core/gates.mjs';
 import { acquireLock, refreshLock, ownerState, readLock } from '../core/loop-lock.mjs';
+import { captureSnapshot } from '../core/progress.mjs';
+import { escalationDirective } from '../core/progress.mjs';
+import { readMemory, writeMemory, stagnantAfterTurn } from '../core/turn-progress.mjs';
+import { noticeAfterTurn } from '../core/secret-notice.mjs';
 
 const HOOK_DIR = dirname(fileURLToPath(import.meta.url));
 const LIB_DIR = join(HOOK_DIR, '..', 'lib');
@@ -95,7 +99,16 @@ if (ownerStatus === 'alive' || ownerStatus === 'foreign-unknown') {
 }
 
 // --- The loop decision (gate logic lives in core/gates.mjs, shared by both drivers) ---
-const decision = decideContinuation(st, { sessionId: SESSION_ID });
+const decision = decideContinuation(st, { sessionId: SESSION_ID, driver: 'stop-hook' });
+
+// v1.7.0: dropping a stale step instruction in silence would swap one quiet failure for another,
+// so the reason it was dropped is said out loud. The loop still continues — it just continues on
+// the generic "work it out from STATE" instruction instead of on an instruction for a position
+// the loop left behind.
+if (decision.staleNextPrompt) {
+  process.stderr.write(
+    `ralph-loop-stop: the recorded step instruction was dropped — ${decision.staleNextPrompt.why}\n`);
+}
 
 // Stop gates: send an alert (if any) and allow the stop.
 if (decision.action === 'stop') {
@@ -103,13 +116,59 @@ if (decision.action === 'stop') {
   failOpen();
 }
 
+// --- Turn progress (v1.8.0) ---
+// The documented promise — two empty turns escalate, three record a no_progress blocker — was
+// implemented only in core/supervisor.mjs. On this driver, the default one, nothing measured
+// anything: an agent waiting for an event that had already happened looked exactly like an agent
+// at work. Reported from a live project after a six-hour idle.
+//
+// The snapshot is taken BEFORE this hook writes its own patch. Taken after, it would include our
+// iteration counter and last_action_at, the driver would read its own bookkeeping as the agent's
+// work, and the stall could never be detected. The supervisor guards the same way, for the same
+// reason.
+const DOCS_DIR = dirname(STATE_FILE);
+let stagnantTurns = 0;
+let memory = null;
+let snapshot = null;
+try {
+  memory = readMemory(DOCS_DIR);
+  snapshot = captureSnapshot({ cwd: PROJECT_DIR, stateFile: STATE_FILE });
+  stagnantTurns = stagnantAfterTurn(memory, snapshot);
+} catch { stagnantTurns = 0; }   // an observer must never be able to break a turn
+
+// The secrets notice, on this driver for the first time (v1.8.0). README, GUIDELINE and
+// docs/failure-modes all promise it without naming an engine — "if a commit picks up a file that
+// looks like key storage, you get a line in the log and a notification" — and it was wired only
+// into core/supervisor.mjs. On the default engine nobody was watching, which is precisely where a
+// live project committed a file of root passwords and only human eyes caught it.
+//
+// It BLOCKS NOTHING, by the same explicit decision as on the supervisor: the ability to commit a
+// key is preserved deliberately. The job here is to inform, not to obstruct.
+if (memory && snapshot) {
+  try {
+    const notice = noticeAfterTurn({ cwd: PROJECT_DIR, before: memory.snapshot, after: snapshot });
+    if (notice) {
+      process.stderr.write(`ralph-loop-stop: WARNING: ${notice.message}\n`);
+      notify('Ralph Loop: secrets in a commit', notice.message);
+    }
+  } catch { /* an observer must never be able to break a turn */ }
+}
+
 // --- Continuing the loop ---
 // Atomic STATE update through the proven update-state.mjs (backup plus temp file and rename).
-const patch = JSON.stringify({
+const patchObj = {
   iteration: decision.next.iteration,
   last_session_id: decision.next.lastSessionId,
   session_count: decision.next.sessionCount,
-});
+};
+if (stagnantTurns >= 3) {
+  patchObj.blockers = [{
+    type: 'no_progress',
+    detail: `${stagnantTurns} consecutive turns without measurable progress (git and STATE unchanged), escalation did not help`,
+    at: new Date().toISOString(),
+  }];
+}
+const patch = JSON.stringify(patchObj);
 const res = spawnSync(process.execPath, [join(LIB_DIR, 'update-state.mjs'), STATE_FILE],
   { input: patch, encoding: 'utf8' });
 
@@ -122,10 +181,29 @@ if (!res || res.status !== 0) {
   failOpen();
 }
 
+// Remember the state AFTER our own write, so the next turn compares like with like: both snapshots
+// are taken at the same point in the cycle and the only thing between them is the agent's turn.
+try { writeMemory(DOCS_DIR, captureSnapshot({ cwd: PROJECT_DIR, stateFile: STATE_FILE }), stagnantTurns); }
+catch { /* losing one observation is cheaper than losing the turn */ }
+
+// Three empty turns in a row: the blocker is already written above, so the loop stops here the same
+// way it stops for any other blocker. Escalation was tried and did not help.
+if (stagnantTurns >= 3) {
+  process.stderr.write(`ralph-loop-stop: ${stagnantTurns} turns without measurable progress — no_progress blocker recorded\n`);
+  notify('Ralph Loop: no progress',
+    `${stagnantTurns} consecutive turns without progress — a no_progress blocker was written to STATE. See docs/failure-modes.md.`);
+  failOpen();
+}
+
+// Two empty turns: tell the agent, in the instruction it is about to act on, that its last turns
+// changed nothing. This is the case the loop exists for — an agent that believes it is waiting for
+// something is unable to notice that nothing is coming.
+const reason = stagnantTurns >= 2 ? escalationDirective(decision.reason, stagnantTurns) : decision.reason;
+
 // Emit decision:block so that Claude continues.
 process.stdout.write(JSON.stringify({
   decision: 'block',
-  reason: decision.reason,
+  reason,
   systemMessage: decision.systemMessage,
 }));
 process.exit(0);

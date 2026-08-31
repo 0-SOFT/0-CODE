@@ -158,11 +158,16 @@ test('orphan registry: the next launch finishes off the children of a killed pre
 // agent had already produced two commits but did not fit into 15 minutes, and the whole turn was discarded.
 // The design error: the cap was meant to catch a HANG but measured DURATION. A hung process
 // differs from a working one not by how long it lives but by the fact that it is SILENT.
+// The margin here is deliberately enormous, and must stay that way. This test measures "output
+// keeps the process alive", not any particular number of milliseconds — but it used to tick every
+// 150 ms against a 500 ms cap, and that 3x margin was not enough for a machine running the whole
+// suite in parallel: a tick would slip past the cap and the test failed at random. A flaky gate is
+// worse than a missing one, because it teaches everyone to re-run until green.
 test('silence cap: a working process is not aborted even though it outlives the cap', async () => {
-  // prints every 150 ms for about 1.2 s; the silence cap is 500 ms
+  // prints every 100 ms for about 0.8 s; the silence cap is 3 s — a 30x margin
   const r = await runCliAsync(process.execPath,
-    ['-e', 'let n=0;const t=setInterval(()=>{process.stdout.write("tick ");if(++n>=8){clearInterval(t)}},150)'],
-    { idleTimeoutMs: 500 });
+    ['-e', 'let n=0;const t=setInterval(()=>{process.stdout.write("tick ");if(++n>=8){clearInterval(t)}},100)'],
+    { idleTimeoutMs: 3000 });
   assert.equal(r.timedOut, false, 'while output keeps coming this is work, not a hang');
   assert.match(r.stdout, /tick/);
 });

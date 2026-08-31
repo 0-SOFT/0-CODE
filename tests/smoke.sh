@@ -35,8 +35,29 @@ echo "== 3. Version consistency (plugin.json is the single source) =="
 PV="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).version)" "$FW/.claude-plugin/plugin.json")"
 SV="$(grep -m1 '^version:' "$FW/skills/orchestrator-wrapper/SKILL.md" | sed 's/version: *//')"
 [ "$PV" = "$SV" ] && ok "plugin.json($PV) == SKILL.md($SV)" || no "versions: plugin=$PV skill=$SV"
+# The framework keeps a second copy of the skill under .claude/skills/ so that it works on itself.
+# Two copies of one document are the same drift class this project fixed in v1.7.0 for the step
+# instruction: the copies diverged in that very version, silently, and nothing objected.
+SKILL_SRC="$FW/skills/orchestrator-wrapper/SKILL.md"
+SKILL_COPY="$FW/.claude/skills/orchestrator-wrapper/SKILL.md"
+if [ -f "$SKILL_COPY" ]; then
+  cmp -s "$SKILL_SRC" "$SKILL_COPY"     && ok "the .claude/ copy of SKILL.md matches the source"     || no "SKILL.md and its .claude/ copy have diverged"
+else
+  ok "no .claude/ copy of SKILL.md (nothing to keep in step)"
+fi
 
 T="$(mktemp -d)"
+# The backstop lives in core/loop-limits.mjs. Both settings files are generated from it, but
+# templates/pm2-ecosystem.json is static JSON and cannot import — so it is compared here instead.
+# This is the third copy the 0.4.1 audit complained about (P2.3); it can no longer drift in silence.
+BS="$(node --input-type=module -e "
+import { pathToFileURL } from 'node:url';
+const m = await import(pathToFileURL(process.argv[1]).href);
+process.stdout.write(String(m.STOP_HOOK_BLOCK_CAP));
+" "$FW/core/loop-limits.mjs")"
+PM="$(node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).apps[0].env.CLAUDE_CODE_STOP_HOOK_BLOCK_CAP))" "$FW/templates/pm2-ecosystem.json")"
+[ "$BS" = "$PM" ] && ok "the backstop in pm2-ecosystem.json matches core/loop-limits.mjs ($BS)"   || no "backstop drift: loop-limits=$BS pm2-ecosystem=$PM"
+
 echo "== 4. Parser: escaping and nesting =="
 cat > "$T/STATE.md" <<'YAML'
 ---
@@ -210,7 +231,11 @@ allow(){ echo "$1" | grep -q '"permissionDecision":"allow"'; }
 # destructive → deny (including --force at the end of a command and inside a compound)
 deny "$(sg '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}')" && ok "safety-guard: force push -> deny" || no "force push was not blocked"
 deny "$(sg '{"tool_name":"Bash","tool_input":{"command":"git push origin main --force"}}')" && ok "safety-guard: --force at the end -> deny" || no "--force at the end was not blocked"
-deny "$(sg '{"tool_name":"Bash","tool_input":{"command":"git add . && git commit -m x && git push origin main --force-with-lease"}}')" && ok "safety-guard: force inside a compound command -> deny" || no "force inside a compound command was not blocked"
+deny "$(sg '{"tool_name":"Bash","tool_input":{"command":"git add . && git commit -m x && git push origin main --force"}}')" && ok "safety-guard: force inside a compound command -> deny" || no "force inside a compound command was not blocked"
+# v1.11.0: the careful form is allowed. It refuses to overwrite anything that appeared after your
+# last fetch, so it is the ordinary way to push a rebased branch of your own; blocking it alongside
+# the blind form cost the loop a turn on a routine operation while preventing nothing.
+allow "$(sg '{"tool_name":"Bash","tool_input":{"command":"git push origin main --force-with-lease"}}')" && ok "safety-guard: --force-with-lease -> allow (the careful form)" || no "--force-with-lease was blocked"
 # v1.2.1: `git reset --hard` is no longer blocked — the loss is recoverable from git, while the
 # glob produced false refusals on routine work (`git reset --hard origin/main`). We assert the opposite:
 allow "$(sg '{"tool_name":"Bash","tool_input":{"command":"git reset --hard origin/main"}}')" && ok "safety-guard: reset --hard -> allow (routine is not blocked)" || no "reset --hard was blocked by mistake"
@@ -268,9 +293,30 @@ node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$FW/co
 { [ -f "$FW/config/.env.example" ] && ! grep -qE '^[A-Za-z_][A-Za-z0-9_]*=[[:space:]]*[^[:space:]]' "$FW/config/.env.example"; } && ok "config/.env.example exists and holds no values (v0.7.0)" || no ".env.example is missing or contains values"
 # 8e. global-settings.template: hooks present, mcpServers/permissions absent
 node -e "const g=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.exit(g.hooks&&!g.mcpServers&&!g.permissions?0:1)" "$FW/config/global-settings.template.json" 2>/dev/null && ok "global-settings: hooks without mcpServers/permissions (v0.7.0)" || no "global-settings is incorrect"
-# 8f. sanitisation: no real secrets in toolset/ or config/
-SEC="$(grep -rIE '(ghp_[A-Za-z0-9]{36})|(sk-ant-[A-Za-z0-9_-]{20,})|(sk-or-v1-[A-Za-z0-9]{32,})|(AKIA[0-9A-Z]{16})|(xox[baprs]-[A-Za-z0-9-]{20,})' "$FW/toolset" "$FW/config" 2>/dev/null | grep -vEi 'x{4,}|your[_-]|example|placeholder|redacted|\$\{' || true)"
-[ -z "$SEC" ] && ok "sanitisation: toolset/ and config/ carry no secrets (v0.7.0)" || no "sanitisation: a secret was found — [$SEC]"
+# 8f. sanitisation: no real secrets in anything git could stage from toolset/ or config/.
+# This used to grep both directories wholesale, which meant it read config/.env — live values by
+# design, ignored by git, excluded from publication. The suite was therefore red on every machine
+# where the framework is actually used and green only where it is not, which teaches people to
+# ignore red. lib/secret-scan.mjs asks git what it WOULD stage instead; no filename is
+# special-cased, so an entry added to the ignore policy leaves the scan through the same door.
+# Measured here: 511 scannable files against 512 on disk, the difference being config/.env alone.
+SEC="$(node "$FW/lib/secret-scan.mjs" toolset config 2>&1)"; SEC_RC=$?
+if [ "$SEC_RC" -eq 0 ]; then
+  ok "sanitisation: nothing git could stage carries a secret (v1.7.1)"
+elif [ "$SEC_RC" -eq 2 ]; then
+  skip "sanitisation scan (not a git work tree — an export before git init)"
+else
+  no "sanitisation: a secret was found — [$SEC]"
+fi
+# 8f-bis. The positive invariant that replaces the old false alarm. Excluding config/.env from the
+# scan is only honest if something still asserts the file cannot be committed at all.
+if git -C "$FW" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  ENV_IGNORED=1; git -C "$FW" check-ignore --no-index -q -- config/.env || ENV_IGNORED=0
+  ENV_TRACKED="$(git -C "$FW" ls-files -- config/.env)"
+  { [ "$ENV_IGNORED" -eq 1 ] && [ -z "$ENV_TRACKED" ]; }     && ok "sanitisation: config/.env is ignored and absent from the index (v1.7.1)"     || no "sanitisation: config/.env is committable (ignored=$ENV_IGNORED tracked=[$ENV_TRACKED])"
+else
+  skip "config/.env invariant (not a git work tree)"
+fi
 # 8g. provisioning script syntax
 if [ -f "$FW/tools/snapshot-toolset.sh" ]; then
   { bash -n "$FW/provision-toolset.sh" && bash -n "$FW/tools/snapshot-toolset.sh"; } 2>/dev/null \
@@ -296,7 +342,11 @@ A.push(decideContinuation({blockers:[],released_version:'1',current_version:'1'}
 A.push(decideContinuation({blockers:[],iteration:60,max_iterations:60},{sessionId:'s'}).action==='stop');
 A.push(decideContinuation({blockers:[],budget_metrics:{version_cost_usd:10,cap_usd:5}},{sessionId:'s'}).action==='stop');
 const c=decideContinuation({blockers:[],iteration:3,max_iterations:60,next_step_prompt:'P',last_session_id:'old'},{sessionId:'live'});
-A.push(c.action==='continue'&&c.next.iteration===4&&c.reason==='P'&&c.adopted===true);
+A.push(c.action==='continue'&&c.next.iteration===4&&c.stepInstruction==='P'&&c.reason.includes('P')&&c.adopted===true);
+// v1.7.0: a step instruction written for another version must not reach the agent.
+const stale=decideContinuation({blockers:[],iteration:3,max_iterations:60,current_version:'6.4.0',next_step_prompt:'finish stage 4.6.0'},{sessionId:'live'});
+A.push(stale.action==='continue'&&!stale.reason.includes('finish stage 4.6.0')&&!!stale.staleNextPrompt);
+A.push(/blockers: none/.test(stale.reason));
 A.push(destructiveReason('git push --force')!==null);
 A.push(destructiveReason('rm -rf /')!==null);
 A.push(destructiveReason('git push origin main')===null);
@@ -441,6 +491,51 @@ process.exit(A.every(Boolean) ? 0 : 1);
 grep -qE "permissionDecision|process.exit|throw new Error" "$FW/core/secret-notice.mjs"   && no "the secrets notice must not be able to block"   || ok "secrets: observation only, nothing can block (an explicit user decision)"
 # 13c. bootstrap is honest about notifications
 grep -q "will NOT be notified" "$FW/bootstrap.sh" && ok "bootstrap warns about silent notifications" || no "bootstrap says nothing about notifications"
+
+echo "== 14. Ignore policy: one source, both trees (v1.7.1) =="
+# .gitignore and templates/gitignore.public are rendered from lib/ignore-policy.mjs. Two files
+# exist because git needs one at the root of each tree; they are no longer two sources. This
+# section is the reader half of that contract.
+#
+# It asks git, never grep. A line sitting in an ignore file and a path git actually refuses are
+# different claims, and only the second protects anything — the entry guarding opencode.json was
+# present in one copy for a whole release while protecting nothing on any live machine.
+
+# 14a. both rendered files still agree with the policy (entries only — a CRLF checkout is not drift)
+if IGN_OUT="$(node "$FW/tools/gen-ignore.mjs" --check 2>&1)"; then
+  ok "ignore policy: both trees match lib/ignore-policy.mjs"
+else
+  no "ignore policy drifted: $(printf '%s' "$IGN_OUT" | grep -E 'LEAK RISK|missing in|present in|MISSING' | tr '\n' ';' | sed 's/;$//')"
+fi
+
+# 14b. behaviour: git really refuses every secret-bearing path. Probes stand in for the patterns —
+# *.key cannot be handed to check-ignore literally, probe.key can. Needs a git work tree: an export
+# inspected before `git init` legitimately has none, so that case is skipped aloud rather than
+# reported as a pass.
+if git -C "$FW" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  node --input-type=module -e "
+import { pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
+const S = await import(pathToFileURL(process.argv[1]).href);
+const root = process.argv[2];
+const probes = { '.opencode/': '.opencode/state.json', '.playwright-mcp/': '.playwright-mcp/page.yml' };
+const bad = [];
+for (const e of S.SECRET_BEARING) {
+  const probe = probes[e] || (e.startsWith('*') ? 'probe' + e.slice(1) : e);
+  const r = spawnSync('git', ['check-ignore', '--no-index', '-q', '--', probe], { cwd: root });
+  if (r.status !== 0) bad.push(e);
+}
+if (bad.length) { process.stderr.write(bad.join(', ')); process.exit(1); }
+" "$FW/lib/ignore-policy.mjs" "$FW" 2>/dev/null && ok "ignore policy: git refuses every secret-bearing path" || no "ignore policy: git would STAGE a secret-bearing path"
+
+  # 14c. a rule cannot save a path already in the index — that needs `git rm --cached`. Three
+  # Playwright snapshots reached the public repository exactly this way.
+  STUCK="$(git -C "$FW" ls-files -- opencode.json AGENTS.md .opencode .playwright-mcp 2>/dev/null | tr '\n' ' ')"
+  [ -z "$STUCK" ] && ok "ignore policy: nothing secret-bearing is stuck in the index" || no "ignore policy: tracked despite the rule — $STUCK"
+else
+  skip "ignore policy behaviour (not a git work tree — an export before git init)"
+  skip "ignore policy index check (not a git work tree)"
+fi
 
 echo "== TOTAL: PASS=$PASS, FAIL=$FAIL, SKIPPED=$SKIPPED =="
 [ "$FAIL" -eq 0 ] && { echo "OK 0 failed — every smoke check passed"; exit 0; } || { echo "FAIL some checks did not pass"; exit 1; }

@@ -1,6 +1,6 @@
 # GUIDELINE — how this works, and why it works this way
 
-> **Framework version:** v1.6.1.
+> **Framework version:** v1.12.0.
 >
 > This file is for the person who opened the repository and wants to understand **why everything
 > is shaped the way it is**. If you only want to use the framework, read [README.md](README.md).
@@ -106,16 +106,98 @@ error anywhere.
 
 ## 5. Stopping
 
-Exactly four conditions stop the loop, and all four are visible in STATE:
+By default two conditions stop the loop; two more wait to be switched on. All four are visible
+in STATE:
 
 1. a **blocker** — something only a human can resolve;
 2. `released_version == current_version` — the roadmap is finished;
-3. the **iteration cap**;
-4. the **budget cap**.
+3. the **iteration cap** — opt-in since v1.9.0, absent by default;
+4. the **budget cap** — opt-in, and enforced only under the supervisor.
+
+### Why the caps are opt-in (v1.9.0)
+
+A limit belongs to whoever runs the project. Until v1.9.0 an absent `max_iterations` quietly became
+1000 and a new project got 25 — numbers nobody chose for that work. Now absent, `null`, `0` and
+anything negative all mean the same thing: no cap. A positive number behaves exactly as before, so
+the change removes a default rather than a feature.
+
+The cost is stated rather than softened. With no cap set, two things stop the loop: a blocker and a
+finished roadmap. What does not vanish with the caps is observability — a run that stops producing
+change writes itself a `no_progress` blocker after three empty turns, and a state file that stops
+changing is reported in every continuation.
+
+The budget cap has a second, older limitation, now said out loud instead of implied: `version_cost_usd`
+is written by the supervisor, which receives the turn cost from the engine. The Stop hook never sees
+a cost. Its payload carries a transcript path, and the transcript holds token counts and a model
+name but no cost field of any kind. Money could be derived from tokens only by keeping a price table
+per model, tier, region and token kind — a copy of somebody else's data with no expiry date, which
+is precisely the failure this project spent v1.7.0 removing. A guard reporting a wrong number is
+worse than one reporting none, because a wrong number is believed. So the cap is left honest: under
+the Stop hook it is reported as unenforceable.
 
 An empty `next_step_prompt` does **not** stop anything — it means "decide from STATE and ROADMAP".
 This is written down because the instructions once claimed the opposite, and the author of those
 instructions (this framework, working on itself) followed them and stopped a healthy loop.
+
+### What the loop actually hands the agent (v1.7.0)
+
+The reason a continuation gives is not the raw `next_step_prompt`. It opens with a block generated
+from STATE — version, stage, iteration out of the cap, whether there is a blocker, which prompt
+file — and says in as many words that this block wins over anything below it. Only then comes the
+recorded step instruction, and only if it still describes where the loop stands.
+
+This exists because a free-text field once outranked the machine fields beside it. In a live
+project the loop handed the agent, for dozens of iterations, an instruction written two versions
+earlier that announced a blocker — while `blockers` was empty. `next_step_prompt` is a cache of an
+instruction; a cache with no invalidation drifts by construction. So it now carries a passport
+minted by `lib/update-state.mjs` (never written by hand), and moving the loop without rewriting the
+instruction is refused outright rather than merely warned about — a warning in a log is read by
+nobody, and the price here was dozens of wasted iterations.
+
+### The guard, and switching it off (v1.10.0)
+
+The `PreToolUse` hook answers every tool call before it runs: allow what is safe, deny what is
+unrecoverable. Silence is not "yes" — it means "no decision", and the question then falls through to
+the ordinary permission system, which is what produced prompts under `bypassPermissions`. So the
+hook always answers.
+
+`SAFETY_GUARD_MODE` chooses between `arbiter` (the default), `guard-only` (deny only), `allow-all`
+(deny nothing at all, by explicit request) and `confirm` (name the consequence and ask for a stated
+reason — v1.11.0). The first two existed before; `allow-all` did not, and neither did any way to
+tell that a value had been misunderstood. `SAFETY_GUARD_MODE=off`
+looked like switching the guard off and changed nothing, because an unrecognised value was replaced
+by the default without a word.
+
+The rule that came out of fixing it, and that now applies across the framework: **where a safe
+default exists, keep it and report the substitution; where none exists, refuse.** A typo in the guard
+mode still gets the full guard, because halting a loop over a typo is worse than continuing safely.
+A typo in `AGENT_BACKEND` is refused outright, because "which engine" has no safe default — falling
+back there is not degrading gracefully, it is silently running a different product at a different
+price.
+
+### Asking instead of refusing (v1.11.0)
+
+A refusal tells an agent it may not. A request for a reason makes it say why it should. The second is
+the better answer wherever the command has a legitimate use, for a simple reason: the framework does
+not know the task, and the agent does.
+
+So rules now carry a level. **Hard** rules cannot be argued with — there is no task context in which
+destroying the machine is right, and asking the agent that proposed it to justify it could only ever
+produce a wrong answer. **Confirmable** rules name the consequence and ask; a force push is the
+canonical case. **Advisory** rules exist only in `confirm` mode and are the reason the mode pays for
+itself: several were dropped in v1.2.1 because refusing them cost more than they saved, and a request
+to think costs a rewritten command where a refusal costs a turn.
+
+The confirmation travels inside the command as a shell comment. That is not a shortcut — it is the
+design. The hook lives for a fraction of a second per call, so remembering a refusal between calls
+would mean a file, keys, an expiry and races. Carrying it in the text costs nothing and buys
+something better: an agent cannot confirm by repeating itself, it has to rewrite the command and
+state a reason, and that reason then lands in the log beside what it justified.
+
+What the mode trades away is worth naming. A hard guarantee becomes a judgement, and the judgement
+belongs to the same agent that proposed the command. That is why it is opt-in, why hard rules stay
+hard, why a throwaway reason is rejected, and why every confirmation is logged: an allowed
+destructive command that left no trace would be strictly worse than a refusal.
 
 ### Blockers are a resource problem
 
@@ -221,7 +303,8 @@ measurement.
 
 ## 9. Testing
 
-230 tests plus 117 smoke checks, no test framework — the project is zero-dependency including its
+360 tests plus 129 smoke checks (119 of them from a fresh clone, where 10 declare themselves
+skipped), no test framework — the project is zero-dependency including its
 tooling.
 
 More interesting is what the tests are *for*. Over three versions, every serious defect was found

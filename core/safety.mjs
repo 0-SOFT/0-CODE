@@ -50,34 +50,84 @@ const FATAL_TARGET =
   /(?:^|\s)["']?(?:\/|\/\*|~|~\/\*|\$HOME(?:\/\*)?|\$\{HOME\}(?:\/\*)?|[A-Za-z]:[\\/]\*?|%USERPROFILE%|\$env:USERPROFILE)["']?(?:\s|$)/i;
 
 // Destructive check for a SINGLE segment. Returns a reason or null.
-export function segmentReason(rawSeg) {
+// A rule's level decides what the guard may do about it (v1.11.0).
+//
+//   hard        — refusing is the only right answer. There is no task context in which destroying
+//                 the machine or cutting the loop is correct, so asking the agent to argue for it
+//                 could only ever produce a wrong answer, and would add risk for nothing.
+//   confirmable — the command has legitimate uses, so the framework does not know better than the
+//                 agent does. It names the consequence and asks for a stated reason.
+//   advisory    — worth a moment's thought, not worth a refusal. These rules exist ONLY in the
+//                 confirm mode: several of them were removed in v1.2.1 because false refusals cost
+//                 the loop a turn, and a rewritten command is a far cheaper mistake to make.
+export const HARD = 'hard';
+export const CONFIRMABLE = 'confirmable';
+export const ADVISORY = 'advisory';
+
+// Destructive check for a SINGLE segment. Returns { reason, level } or null.
+// `advisory` opts in to the third level; without it the behaviour is exactly what it was in v1.10.0.
+export function segmentVerdict(rawSeg, { advisory = false } = {}) {
   const seg = head(rawSeg);
 
   // 1. Filesystem destruction — POSIX (`rm -r` targeting root or home).
   if (/^rm\b/i.test(seg) && /(?:^|\s)-\w*r/i.test(seg) && FATAL_TARGET.test(seg))
-    return 'deleting the root or home directory in full — the machine will not recover';
+    return { level: HARD, reason: 'deleting the root or home directory in full — the machine will not recover' };
 
   // 1b. The same thing in Windows syntax.
   if (/^(?:remove-item|ri|rd|rmdir|del|erase)\b/i.test(seg) && FATAL_TARGET.test(seg))
-    return 'deleting a drive root or the entire home folder — the machine will not recover';
+    return { level: HARD, reason: 'deleting a drive root or the entire home folder — the machine will not recover' };
 
   // 2. Formatting and wiping disks — irreversible whatever the target.
   if (/^(?:format-volume|clear-disk|format|mkfs(?:\.\w+)?|diskpart)\b/i.test(seg))
-    return 'formatting or wiping a disk';
+    return { level: HARD, reason: 'formatting or wiping a disk' };
 
   // 3. Mass-killing agent processes by IMAGE NAME: this takes down every Claude Code session and
   //    the supervisor itself — i.e. it cuts the loop. Killing one process by id
   //    (`taskkill /PID 1234`, `kill 4321`) is legitimate and left alone.
   if (/^taskkill\b/i.test(seg) && /(?:^|\s)\/im\s+\S*(?:claude|node)/i.test(seg))
-    return 'taskkill by claude/node image name would kill EVERY session and the loop itself — use /PID';
+    return { level: HARD, reason: 'taskkill by claude/node image name would kill EVERY session and the loop itself — use /PID' };
   if (/^(?:pkill|killall)\b/i.test(seg) && /(?:^|\s)(?:claude|node)(?:\s|$)/i.test(seg))
-    return 'pkill/killall by claude/node name would kill EVERY session and the loop itself — use a process id';
+    return { level: HARD, reason: 'pkill/killall by claude/node name would kill EVERY session and the loop itself — use a process id' };
 
   // 4. Force-rewriting shared history: this machine is not the only victim.
-  if (/^git\s+push\b/i.test(seg) && /(?:^|\s)(--force\b|--force-with-lease\b|-f\b)/i.test(seg))
-    return 'git push that force-overwrites shared history';
+  //
+  //    `--force-with-lease` is deliberately NOT matched (v1.11.0). It refuses to overwrite anything
+  //    that appeared after your last fetch, which makes it the careful form and the ordinary way to
+  //    push a rebased branch of your own. Blocking it alongside the blind form cost a turn on a
+  //    routine operation while preventing nothing.
+  if (/^git\s+push\b/i.test(seg) && /(?:^|\s)(--force(?!-with-lease)\b|-f\b)/i.test(seg))
+    return { level: CONFIRMABLE, reason: 'git push that force-overwrites shared history' };
+
+  if (!advisory) return null;
+
+  // --- Advisory rules: the confirm mode only ----------------------------------------------------
+  //
+  // Each of these was either dropped in v1.2.1 as too expensive to refuse, or was never expressible
+  // as a refusal at all. They live here because asking an agent to think costs a rewritten command,
+  // where refusing costs a turn — and three lost turns end the loop.
+
+  // Wiping untracked files. This is how an agent once deleted its OWN guard plugin and carried on
+  // without it (v1.3.0) — the incident behind restoring the scaffolding before every turn.
+  if (/^git\s+clean\b/i.test(seg) && /(?:^|\s)-\w*[fd]/i.test(seg))
+    return { level: ADVISORY, reason: 'git clean removes untracked files — they are not in git, so git cannot give them back' };
+
+  // Discarding uncommitted work in one move.
+  if (/^git\s+reset\b/i.test(seg) && /(?:^|\s)--hard\b/i.test(seg))
+    return { level: ADVISORY, reason: 'git reset --hard discards uncommitted work, which git cannot give back' };
+
+  // The container then sees the whole machine. Invisible to every rule above, because the dangerous
+  // part is an argument to a perfectly ordinary command.
+  if (/^docker\b/i.test(seg) && /(?:^|\s)-v\s*["']?(?:\/|[A-Za-z]:[\/])["']?:/i.test(seg))
+    return { level: ADVISORY, reason: 'mounting the filesystem root into a container hands it the whole machine' };
 
   return null;
+}
+
+// The v1.10.0 contract, kept as it was: a plain reason string for hard and confirmable rules.
+// Used by the OpenCode adapter as well, which is why it is not folded into segmentVerdict.
+export function segmentReason(rawSeg) {
+  const v = segmentVerdict(rawSeg);
+  return v ? v.reason : null;
 }
 
 // Split a command line into segments on shell separators, IGNORING separators inside quotes.
@@ -146,12 +196,46 @@ export function stripHeredocBodies(command) {
 }
 
 // Main API: the reason the WHOLE command is destructive (first dangerous segment), or null.
+// The v1.10.0 contract, unchanged, including which rules it reports: the OpenCode adapter uses it.
 export function destructiveReason(command) {
+  const v = destructiveVerdict(command);
+  return v ? v.reason : null;
+}
+
+// The richer verdict: the reason plus the level that decides what the guard may do about it.
+export function destructiveVerdict(command, { advisory = false } = {}) {
   if (!command || typeof command !== 'string') return null;
   const segments = splitSegments(stripHeredocBodies(command));
   for (const seg of segments) {
-    const r = segmentReason(seg);
-    if (r) return r;
+    const v = segmentVerdict(seg, { advisory });
+    if (v) return v;
   }
   return null;
+}
+
+// The confirmation an agent attaches to a command it has reconsidered and still wants to run.
+//
+// It travels IN THE COMMAND rather than in some remembered state, and that is the whole design. The
+// hook lives for a fraction of a second per call; remembering a refusal between calls would mean a
+// file, keys, an expiry and races — a lot of machinery for one idea. Carrying the confirmation in
+// the text costs nothing and buys something better: an agent cannot confirm by repeating itself
+// mechanically, it has to rewrite the command and say why, and the reason then lands in the log
+// next to what it justified.
+//
+// Marker: `# safety-guard: confirmed <reason>` — a shell comment, so the command still runs as
+// written. Only outside quotes: inside them it is text somebody is echoing, not a decision.
+const CONFIRM_MARKER = /(?:^|\s)#\s*safety-guard:\s*confirmed\s+(.+)$/i;
+
+export function confirmationOf(command) {
+  if (!command || typeof command !== 'string') return null;
+  // Strip quoted runs first, so a marker inside a string cannot pass for a decision.
+  let outside = '', quote = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote) { if (ch === quote) quote = null; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; continue; }
+    outside += ch;
+  }
+  const m = CONFIRM_MARKER.exec(outside);
+  return m ? m[1].trim() : null;
 }

@@ -8,7 +8,7 @@ description: >-
   Use this skill at the start of every iteration in any project bootstrapped by
   the framework.
 origin: 0-code-autonomous-framework
-version: 1.6.1
+version: 1.12.0
 ---
 
 # orchestrator-wrapper
@@ -85,8 +85,19 @@ which is the scarcest resource in the loop.
 ## Progress
 
 Every turn is measured against three signals: a new git commit, a changed working tree, a changed
-STATE file. Two turns without any of them and the driver adds an escalation directive to your
-prompt; three and it records a `no_progress` blocker.
+STATE file. Two measured turns without any of them and the driver adds an escalation directive to
+your prompt; three and it records a `no_progress` blocker. Both drivers do this — until v1.8.0 only
+the OpenCode supervisor did, while this document already described it as a property of "the driver".
+
+"Measured" is not a hedge. The supervisor snapshots before a turn because it starts that turn; the
+Claude Code Stop hook only runs when a turn ends, so its first run establishes the baseline and
+measures nothing. On that driver the count therefore begins one turn later. The alternative was to
+guess whether the first turn did anything, and a detector that guesses is worse than one that starts
+a turn late.
+
+A separate signal is time: if `docs/STATE.md` has stood untouched longer than `stall_timeout_minutes`
+(20 by default), the continuation text says so. That one only ever warns. A false stop costs more
+than a false warning, because the loop exists to run without a human.
 
 The lesson behind this: an agent that talks instead of acting looks identical to one that is
 thinking hard — until you measure the disk.
@@ -109,6 +120,26 @@ not a proxy for capability.
 
 - **Update STATE through `lib/update-state.mjs`**, never by hand-editing the frontmatter. The tool
   backs the file up and writes atomically; a half-written STATE breaks the loop.
+- **Move the loop and rewrite the step instruction in the SAME patch.** If a patch changes
+  `current_version`, `current_stage` or `current_prompt_file`, it must also carry
+  `next_step_prompt` — the tool refuses the write otherwise, and tells you what is missing. Pass
+  `"next_step_prompt": null` when you deliberately want the next iteration to work it out from
+  STATE. This is not bureaucracy: a live project once ran for dozens of iterations on an
+  instruction written two versions earlier, announcing a blocker that did not exist.
+- **Never write `next_step_prompt_meta` yourself.** The tool mints it. A passport maintained by
+  hand would be a second cache with the same disease.
+- **Limits are opt-in and the project owner's business.** Since v1.9.0 a project is created with no
+  iteration cap and no spending cap. Do not add one on your own initiative, and do not treat their
+  absence as a defect to fix. If the work genuinely needs a bound, say so and let the owner decide.
+- **Do not fight the guard.** If a command is refused outright, it is an unrecoverable case; change
+  the approach or leave it to a human. Never edit the settings to widen permissions mid-loop — that
+  is the agent disarming itself, and v1.4.0 caught it doing exactly that.
+- **A refusal that offers confirmation is a question, not a wall.** In `confirm` mode the guard names
+  a consequence and asks whether, knowing it, the command is still right for this task. Answer it
+  honestly. Re-issue with `# safety-guard: confirmed <why>` only when you have actually weighed that
+  consequence and still judge the command correct — the reason goes into a log a human reads, and
+  "confirmed because I want to run it" is an answer that will be read as exactly that. If the
+  consequence changes your mind, the guard did its job; find another way.
 - **One iteration, one step.** Do not batch five versions into one turn — the loop exists to make
   progress visible.
 - **Record the reasoning where it belongs.** Decisions go into reports; state goes into STATE.

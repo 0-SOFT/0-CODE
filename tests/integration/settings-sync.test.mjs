@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildTemplateSettings, applyPolicyToSettings, diffAgainstPolicy, readJson,
+  cureSettings, phantomHooks,
   TEMPLATE_PATH, SELF_PATH,
 } from '../../tools/gen-settings.mjs';
 import { findAskRules } from '../../core/permissions-policy.mjs';
@@ -68,4 +69,80 @@ test('diffAgainstPolicy reports the specific differences', () => {
     hooks: buildTemplateSettings().hooks };
   const problems = diffAgainstPolicy(withAsk);
   assert.ok(problems.some(p => p.includes('ask')), 'the ask category must appear in the report');
+});
+
+// --- v1.10.0: the framework learns to cure, not only to diagnose --------------------------------
+//
+// The doctor used to name the disease and point at `node tools/gen-settings.mjs`, a command that
+// knew only its own two files and did nothing at all to somebody else's project. Re-running
+// bootstrap did not help either: it deep-merges, a merge unions arrays, and the template has no
+// `ask` key to displace the project's with. So a real project stayed broken while the framework
+// reported that it knew exactly what was wrong.
+
+const withAsk = () => ({
+  permissions: {
+    defaultMode: 'bypassPermissions',
+    ask: ['Bash(rm -rf *)', 'Bash(git checkout -- *)'],
+    allow: ['Bash(git status)', `Bash(node -e 'const x = "${'y'.repeat(60)}"')`],
+    deny: [],
+  },
+  hooks: { SessionEnd: [{ matcher: '', hooks: [{ type: 'command', command: 'echo bye' }] }] },
+});
+
+test('cure: the ask category is removed from a project the framework owns', () => {
+  const { settings, changes } = cureSettings(withAsk(), { owned: true });
+  assert.equal(settings.permissions.ask, undefined, 'no ask key may survive');
+  assert.equal(findAskRules(settings).length, 0);
+  assert.ok(changes.some(c => /ask category/.test(c)), 'the change is reported, not silent');
+});
+
+// The whole point of removing `ask` rather than sorting it into deny: the deny list is deliberately
+// tiny. Growing it would bring back the v1.2.0 measurement where 7 of 11 everyday commands were
+// blocked by mistake.
+test('cure: removing ask does not grow the deny list', () => {
+  const { settings } = cureSettings(withAsk(), { owned: true });
+  const expected = applyPolicyToSettings({}).permissions.deny;
+  assert.deepEqual(settings.permissions.deny, expected, 'deny stays exactly the policy list');
+  assert.ok(!settings.permissions.deny.includes('Bash(rm -rf *)'),
+    'a blanket rm -rf rule would block cleaning a build directory');
+});
+
+test('cure: a project keeps its own unrelated hooks', () => {
+  const { settings } = cureSettings(withAsk(), { owned: true });
+  assert.ok(settings.hooks.SessionEnd, 'the project had a SessionEnd hook and still does');
+});
+
+// settings.local.json and the user-level file are personal. Curing them wholesale would throw away
+// somebody's own configuration, so there the cure only removes what actively breaks autonomy.
+test('cure: a file the framework does not own is treated surgically', () => {
+  const personal = withAsk();
+  personal.permissions.allow.push('Bash(my-own-tool *)');
+  const { settings, changes } = cureSettings(personal, { owned: false });
+
+  assert.equal(settings.permissions.ask, undefined, 'ask still goes: it outranks every mode');
+  assert.ok(settings.permissions.allow.includes('Bash(my-own-tool *)'), 'personal rules stay');
+  assert.ok(settings.permissions.allow.includes('Bash(git status)'), 'and so do sensible globs');
+  assert.ok(!settings.permissions.allow.some(r => r.length > 120), 'the "always allow" residue goes');
+  assert.ok(changes.some(c => /hyper-specific/.test(c)));
+});
+
+test('cure: a healthy file reports no changes', () => {
+  const { changes } = cureSettings(applyPolicyToSettings({}), { owned: true });
+  assert.ok(!changes.some(c => /ask|hyper-specific/.test(c)), 'nothing to remove');
+});
+
+// A hook reading a variable the contract does not define never fires, so the protection it looks
+// like is imaginary. It is reported rather than deleted: what it meant to check is a human
+// judgement, and quietly removing somebody's guard would repeat the very mistake being fixed.
+test('cure: a hook reading a phantom variable is reported, never silently deleted', () => {
+  const s = { hooks: { PreToolUse: [{ matcher: '*', hooks: [
+    { type: 'command', command: 'node -e "if (process.env.CLAUDE_TOOL_INPUT) {}"' }] }] } };
+  const { settings, needsHuman } = cureSettings(s, { owned: false });
+  assert.deepEqual(needsHuman, ['CLAUDE_TOOL_INPUT']);
+  assert.ok(settings.hooks.PreToolUse, 'the hook is still there for a human to decide about');
+});
+
+test('phantomHooks: an honest hook reading stdin is not flagged', () => {
+  assert.deepEqual(phantomHooks({ hooks: { PreToolUse: [{ matcher: '*', hooks: [
+    { type: 'command', command: '${CLAUDE_PROJECT_DIR}/hooks/run-hook.cmd safety-guard' }] }] } }), []);
 });

@@ -92,10 +92,21 @@ async function main() {
   console.log('  MCP:', mcp.registered.join(', ') || '(none)');
   console.log('  MCP skipped:', mcp.skipped.join(', ') || '(none)');
 
-  const instrPath = join(ROOT, 'CLAUDE.md');
+  // The instructions must describe the TARGET project, not this framework. Provisioning used to
+  // read the framework's own CLAUDE.md unconditionally, so every OpenCode project was handed
+  // "this repository is the framework itself, developing itself" — the agent then reasoned about
+  // the wrong repository from its very first turn. The target's CLAUDE.md is what bootstrap has
+  // just rendered from templates/project-CLAUDE.md; the framework copy is only a last resort for
+  // provisioning run standalone against a directory bootstrap never touched.
+  const targetInstr = join(opt.target, 'CLAUDE.md');
+  const instrPath = existsSync(targetInstr) ? targetInstr : join(ROOT, 'CLAUDE.md');
   if (existsSync(instrPath)) {
+    if (instrPath !== targetInstr) {
+      console.log('  ! the target has no CLAUDE.md — falling back to the framework instructions.');
+      console.log('    Run bootstrap.sh first so the project gets its own.');
+    }
     const r = await backend.installInstructions({ targetDir: opt.target, content: readFileSync(instrPath, 'utf8') });
-    console.log('  Instructions:', r.written.join(', '));
+    console.log('  Instructions:', r.written.join(', '), '←', instrPath);
   }
 
   const r = await backend.ensureReady({ targetDir: opt.target, cwd: opt.target });

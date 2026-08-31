@@ -4,6 +4,9 @@ import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { autodetectBackendId } from '../../core/backend-factory.mjs';
+import { resolveMode } from '../../core/permission-decision.mjs';
+import { KNOWN_STEP_TYPES } from '../../core/model-routing.mjs';
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
@@ -89,11 +92,24 @@ test('blind spot: without tokens the script states the reason and the loop keeps
 // Class 5: a default was chosen without justification.
 // A real case: max_iterations=1000 in a fresh project turned an accidental run into a thousand
 // iterations.
-test('blind spot: the starting iteration limit is sensible', () => {
+test('blind spot: a new project is not handed a limit nobody chose', () => {
   const bootstrap = readFileSync(join(ROOT, 'bootstrap.sh'), 'utf8');
-  const m = bootstrap.match(/^max_iterations:\s*(\d+)/m);
-  assert.ok(m, 'bootstrap must set a starting limit');
-  assert.ok(Number(m[1]) <= 50, `a starting limit of ${m[1]} is too high for an accidental run`);
+  const m = bootstrap.match(/^max_iterations:\s*(\S+)/m);
+  assert.ok(m, 'bootstrap must say something about the iteration limit, even if it is "null"');
+
+  // v1.9.0 reversed the v1.4.0 decision on purpose: limits are opt-in, so the default is no cap.
+  // The old danger it guarded against has not gone away — ANY claude launch inside a project
+  // folder joins the loop — but it is now covered by the no-progress detector, which writes a
+  // no_progress blocker after three turns that change nothing. An accidental probe does nothing,
+  // so it stops on its own; what runs unbounded is an agent that keeps making real changes, which
+  // is what the owner asked for.
+  //
+  // The original reasoning still binds anyone who puts a number back: a DEFAULT limit must stay
+  // small, because a large one is a number nobody chose.
+  if (m[1] === 'null') return;
+  const value = Number(m[1]);
+  assert.ok(Number.isFinite(value), `an unexpected default: ${m[1]}`);
+  assert.ok(value <= 50, `a starting limit of ${value} is too high for an accidental run`);
 });
 
 // Class 6: a document header falls behind reality.
@@ -115,4 +131,65 @@ test('blind spot: the versions in document headers match plugin.json', () => {
   assert.ok(mGuide, 'the GUIDELINE header must carry a version');
   assert.ok(mGuide[1].startsWith(majorMinor),
     `GUIDELINE declares ${mGuide[1]} while the framework is at ${version}`);
+});
+
+// Class 7 (v1.10.0): a tool advertises a flag it does not implement.
+//
+// Caught on this framework, inside the very version that went hunting for this class: the Usage
+// header of tools/gen-settings.mjs still described two flags an hour after three more were added.
+// A stale usage line is the cheapest possible lie — it costs nothing to write and is believed
+// immediately, because the header is the one place a person looks before running something.
+test('blind spot: every flag a tool documents is a flag it reads', () => {
+  // Some of these are deliberately not published (export-public.mjs is a development tool), so the
+  // list is filtered by what is actually here rather than assumed. Found by running this very suite
+  // from the published tree, which is the only place the difference shows.
+  const tools = ['tools/gen-settings.mjs', 'tools/gen-ignore.mjs', 'tools/export-public.mjs',
+    'tools/doctor-permissions.mjs', 'tools/provision-opencode.mjs', 'core/supervisor.mjs'];
+  let checked = 0;
+  for (const rel of tools) {
+    if (!existsSync(join(ROOT, rel))) continue;
+    const src = readFileSync(join(ROOT, rel), 'utf8');
+    const usage = src.match(/\/\/\s*Usage:\n((?:\/\/.*\n)+)/);
+    if (!usage) continue;                       // a tool without a usage block promises nothing
+    const promised = new Set((usage[1].match(/--[a-z][a-z-]*/g) || []));
+    const body = src.slice(usage.index + usage[0].length);
+    for (const flag of promised) {
+      assert.ok(body.includes(`'${flag}'`) || body.includes(`"${flag}"`),
+        `${rel}: the usage block promises ${flag}, but nothing in the file reads it`);
+    }
+    checked++;
+  }
+  // The lesson of the coverage gate that measured nothing: a check that examined no files must say
+  // so rather than report success.
+  assert.ok(checked >= 3, `the guard examined only ${checked} tools — it would pass vacuously`);
+});
+
+// Class 8 (v1.10.0): an unknown value handed in by a human is swallowed instead of reported.
+//
+// Two live cases: AGENT_BACKEND=opencodee silently ran Claude (a different engine at a different
+// price), and SAFETY_GUARD_MODE=off silently ran the full guard. The rule that separates them:
+// where a safe default exists, keep it and say so; where none exists — "which engine" has no safe
+// default — refuse.
+test('blind spot: a misspelt AGENT_BACKEND is refused, not silently swapped', () => {
+  assert.throws(() => autodetectBackendId({ AGENT_BACKEND: 'opencodee' }), /Unknown AGENT_BACKEND/);
+  assert.throws(() => autodetectBackendId({ AGENT_BACKEND: 'OPENCODE' }), /Unknown AGENT_BACKEND/,
+    'the value is case-sensitive, and a near miss is still a miss');
+  assert.equal(autodetectBackendId({}), 'claude', 'not setting it at all is not a mistake');
+});
+
+test('blind spot: a misspelt SAFETY_GUARD_MODE keeps the guard on and says so', () => {
+  const r = resolveMode({ SAFETY_GUARD_MODE: 'of' });
+  assert.equal(r.mode, 'arbiter', 'the safe default is kept: a typo must not halt the loop');
+  assert.equal(r.recognised, false, 'and the substitution is reported');
+});
+
+// Every step type the code routes on must exist in the routing table: an unknown one falls back to
+// the mid tier, so a misspelt literal would quietly buy a cheaper, weaker model than the step needs.
+test('blind spot: production code routes only on known step types', () => {
+  const src = readFileSync(join(ROOT, 'core', 'supervisor.mjs'), 'utf8');
+  const used = [...src.matchAll(/routeModel\(\s*'([^']+)'/g)].map(m => m[1]);
+  assert.ok(used.length, 'the supervisor must route a model somewhere');
+  for (const t of used) {
+    assert.ok(KNOWN_STEP_TYPES.includes(t), `routeModel('${t}') would silently fall back to mid`);
+  }
 });

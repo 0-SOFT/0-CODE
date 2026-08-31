@@ -14,6 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { readdirSync, existsSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { coverageRows, sourceRows } from './coverage-report.mjs';
 
 const TESTS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -56,15 +57,14 @@ if (res.stderr) process.stderr.write(res.stderr);
 if ((res.status ?? 1) !== 0) process.exit(res.status ?? 1);
 
 // Coverage threshold over the source modules (core/ lib/ hooks/), excluding tests and helpers.
+// The table parser lives in ./coverage-report.mjs so it can be examined without running the suite.
 if (coverageMin !== null) {
-  const rows = [];
-  for (const line of (res.stdout || '').split('\n')) {
-    const m = line.match(/^#\s+(\S+\.mjs)\s+\|\s+([\d.]+)\s+\|/);
-    if (!m) continue;
-    const file = m[1];
-    if (/(^|[\\/])(core|lib|hooks)[\\/]/.test(file) && !/test|helpers/.test(file)) {
-      rows.push({ file, line: parseFloat(m[2]) });
-    }
+  const all = coverageRows(res.stdout);
+  const rows = sourceRows(all);
+  if (rows.length === 0) {
+    console.error('\nFAIL the coverage gate matched no source modules — it would pass vacuously.');
+    console.error(`   parsed ${all.length} row(s) from the report; expected core/, lib/ and hooks/ among them.`);
+    process.exit(1);
   }
   const below = rows.filter(r => r.line < coverageMin);
   if (below.length) {

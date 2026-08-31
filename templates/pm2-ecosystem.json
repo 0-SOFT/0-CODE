@@ -13,7 +13,7 @@
       "error_file": "./docs/logs/pm2-error.log",
       "merge_logs": true,
       "env": {
-        "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP": "1000"
+        "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP": "100000"
       }
     }
   ]

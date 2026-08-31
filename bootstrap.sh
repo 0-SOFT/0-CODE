@@ -99,7 +99,10 @@ fi
 
 stamp() { date +%Y-%m-%dT%H-%M-%S; }
 
-copy_if_missing() {
+# Framework artefacts (hooks, lib/, core/, schemas, templates) must MATCH the framework version, so
+# a differing copy is replaced — after a backup. The name says so: an earlier name, copy_if_missing,
+# read as "only copies when absent" and was believed by at least one reader of the source.
+copy_with_backup() {
   local src="$1"
   local dst="$2"
   if [ -f "$dst" ]; then
@@ -111,12 +114,54 @@ copy_if_missing() {
       echo "    backup:              $dst -> $bak"
       cp -a "$src" "$dst"
       echo "    overwrite:           $dst"
+      OVERWRITTEN="${OVERWRITTEN:-}  $dst -> $bak
+"
     fi
   else
     mkdir -p "$(dirname "$dst")"
     cp -a "$src" "$dst"
     echo "    create:              $dst"
   fi
+}
+
+# Additive config files are MERGED, never replaced. A line in .gitignore is a statement the project
+# made about itself; replacing the file deletes statements nobody asked to delete, and a backup does
+# not help — a rule that lives only in .gitignore.bak protects nothing. In the incident behind
+# v1.8.0 the deleted statement was the one hiding a file of root passwords, and the next commit
+# picked them up.
+#
+# Existing lines are never touched, reordered or rewritten. Missing ones are appended under a header
+# so the project can see what came from here. Comparison is per line, exactly like
+# lib/ignore-policy.mjs does it, which also makes a repeated install add nothing.
+merge_additive() {
+  local src="$1"
+  local dst="$2"
+  if [ ! -f "$dst" ]; then
+    mkdir -p "$(dirname "$dst")"
+    cp -a "$src" "$dst"
+    echo "    create:              $dst"
+    return
+  fi
+  local missing="" line count=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|'#'*) continue ;;                       # blanks and comments carry no rule
+    esac
+    if ! grep -qxF -- "$line" "$dst" 2>/dev/null; then
+      missing="${missing}${line}
+"
+      count=$((count + 1))
+    fi
+  done < "$src"
+  if [ "$count" -eq 0 ]; then
+    echo "    already merged:      $dst (nothing to add)"
+    return
+  fi
+  {
+    printf '\n# --- added by 0-CODE bootstrap ---\n'
+    printf '%s' "$missing"
+  } >> "$dst"
+  echo "    merged:              $dst (+$count rule(s), existing lines untouched)"
 }
 
 create_dir_if_missing() {
@@ -133,17 +178,17 @@ create_dir_if_missing "$TARGET_DIR/hooks"
 # The Stop hook wrapper (extensionless) plus every .mjs/.cmd (the hook logic lives in
 # ralph-loop-stop.mjs, the polyglot wrapper in run-hook.cmd). hooks.json is NOT copied — it is
 # only for plugin mode. A glob rather than a hard-coded list — the same root fix as for lib/.
-copy_if_missing "$FRAMEWORK_ROOT/hooks/ralph-loop-stop" "$TARGET_DIR/hooks/ralph-loop-stop"
+copy_with_backup "$FRAMEWORK_ROOT/hooks/ralph-loop-stop" "$TARGET_DIR/hooks/ralph-loop-stop"
 # Session logger (v0.5.6+): extensionless like ralph-loop-stop — launched through run-hook.cmd.
 # It automatically saves the transcript into docs/logs/<date>/ on Stop and SessionEnd.
-copy_if_missing "$FRAMEWORK_ROOT/hooks/save-session-log" "$TARGET_DIR/hooks/save-session-log"
+copy_with_backup "$FRAMEWORK_ROOT/hooks/save-session-log" "$TARGET_DIR/hooks/save-session-log"
 # The protective PreToolUse hook (v0.6.0+): an extensionless wrapper plus safety-guard.mjs.
 # It blocks irreversible commands — real protection while git operations run without prompts.
 
-copy_if_missing "$FRAMEWORK_ROOT/hooks/safety-guard" "$TARGET_DIR/hooks/safety-guard"
+copy_with_backup "$FRAMEWORK_ROOT/hooks/safety-guard" "$TARGET_DIR/hooks/safety-guard"
 for src in "$FRAMEWORK_ROOT"/hooks/*.mjs "$FRAMEWORK_ROOT"/hooks/*.cmd; do
   [ -f "$src" ] || continue
-  copy_if_missing "$src" "$TARGET_DIR/hooks/$(basename "$src")"
+  copy_with_backup "$src" "$TARGET_DIR/hooks/$(basename "$src")"
 done
 chmod +x "$TARGET_DIR/hooks/ralph-loop-stop" "$TARGET_DIR/hooks/save-session-log" "$TARGET_DIR/hooks/safety-guard" "$TARGET_DIR/hooks/run-hook.cmd" 2>/dev/null || true
 
@@ -172,7 +217,7 @@ create_dir_if_missing "$TARGET_DIR/lib"
 # The root fix is a glob by file type.
 for src in "$FRAMEWORK_ROOT"/lib/*.mjs "$FRAMEWORK_ROOT"/lib/*.sh "$FRAMEWORK_ROOT"/lib/*.ps1; do
   [ -f "$src" ] || continue
-  copy_if_missing "$src" "$TARGET_DIR/lib/$(basename "$src")"
+  copy_with_backup "$src" "$TARGET_DIR/lib/$(basename "$src")"
 done
 chmod +x "$TARGET_DIR/lib/telegram-notify.sh" 2>/dev/null || true
 
@@ -185,32 +230,38 @@ chmod +x "$TARGET_DIR/lib/telegram-notify.sh" 2>/dev/null || true
 create_dir_if_missing "$TARGET_DIR/core"
 for src in "$FRAMEWORK_ROOT"/core/*.mjs; do
   [ -f "$src" ] || continue
-  copy_if_missing "$src" "$TARGET_DIR/core/$(basename "$src")"
+  copy_with_backup "$src" "$TARGET_DIR/core/$(basename "$src")"
 done
 if [ -d "$FRAMEWORK_ROOT/core/backends" ]; then
   create_dir_if_missing "$TARGET_DIR/core/backends"
   for src in "$FRAMEWORK_ROOT"/core/backends/*.mjs; do
     [ -f "$src" ] || continue
-    copy_if_missing "$src" "$TARGET_DIR/core/backends/$(basename "$src")"
+    copy_with_backup "$src" "$TARGET_DIR/core/backends/$(basename "$src")"
   done
 fi
 
 # --- 5b. Root config dotfiles (.gitignore, .gitattributes) ---
 # Without them the bootstrapped project is exposed: no .gitignore means .env can reach git;
 # no .gitattributes means bash scripts get CRLF on a Linux checkout and break (the same root
-# cause as above, but for target projects). copy_if_missing never overwrites existing files.
+# cause as above, but for target projects).
+#
+# These two are MERGED, not copied. The comment that used to stand here claimed copy_if_missing
+# "never overwrites existing files" — it always did, after a backup, and this was the most dangerous
+# place to be wrong about it: a project that already had its own .gitignore lost the rules that were
+# only in it. Of all the call sites in this script these are the only additive files; the rest are
+# framework artefacts that must match the framework version.
 # The .gitignore handed to a target project comes from templates/gitignore.public when it exists
 # (the canonical, publishable version) and falls back to the framework root otherwise.
 GITIGNORE_SRC="$FRAMEWORK_ROOT/templates/gitignore.public"
 [ -f "$GITIGNORE_SRC" ] || GITIGNORE_SRC="$FRAMEWORK_ROOT/.gitignore"
-copy_if_missing "$GITIGNORE_SRC"                 "$TARGET_DIR/.gitignore"
-copy_if_missing "$FRAMEWORK_ROOT/.gitattributes" "$TARGET_DIR/.gitattributes"
+merge_additive "$GITIGNORE_SRC"                 "$TARGET_DIR/.gitignore"
+merge_additive "$FRAMEWORK_ROOT/.gitattributes" "$TARGET_DIR/.gitattributes"
 
 # --- 6. Copy schemas ---
 
 create_dir_if_missing "$TARGET_DIR/docs/schemas"
-copy_if_missing "$FRAMEWORK_ROOT/docs/schemas/STATE.schema.json" "$TARGET_DIR/docs/schemas/STATE.schema.json"
-copy_if_missing "$FRAMEWORK_ROOT/docs/schemas/tools-catalog.schema.json" "$TARGET_DIR/docs/schemas/tools-catalog.schema.json"
+copy_with_backup "$FRAMEWORK_ROOT/docs/schemas/STATE.schema.json" "$TARGET_DIR/docs/schemas/STATE.schema.json"
+copy_with_backup "$FRAMEWORK_ROOT/docs/schemas/tools-catalog.schema.json" "$TARGET_DIR/docs/schemas/tools-catalog.schema.json"
 
 # --- 6b. Seed tools-catalog.json (v0.5.5+): persistent MCP capability catalog ---
 # An empty catalogue; the orchestrator fills it during planning and on every MCP re-check.
@@ -231,7 +282,7 @@ fi
 # --- 7. Copy framework-local orchestrator-wrapper skill ---
 
 create_dir_if_missing "$TARGET_DIR/.claude/skills/orchestrator-wrapper"
-copy_if_missing \
+copy_with_backup \
   "$FRAMEWORK_ROOT/skills/orchestrator-wrapper/SKILL.md" \
   "$TARGET_DIR/.claude/skills/orchestrator-wrapper/SKILL.md"
 
@@ -382,7 +433,7 @@ create_dir_if_missing "$TARGET_DIR/docs/logs"
 # Copy prompt templates (always, they're framework artifacts)
 for t in research.md update.md audit_architecture.md audit_codebase.md audit_frontend.md audit_tests.md testing.md guideline.md; do
   if [ -f "$FRAMEWORK_ROOT/docs/prompts/templates/$t" ]; then
-    copy_if_missing "$FRAMEWORK_ROOT/docs/prompts/templates/$t" "$TARGET_DIR/docs/prompts/templates/$t"
+    copy_with_backup "$FRAMEWORK_ROOT/docs/prompts/templates/$t" "$TARGET_DIR/docs/prompts/templates/$t"
   fi
 done
 
@@ -409,12 +460,18 @@ audit_cycle: null
 verification_pending: false
 session_count: 0
 iteration: 0
-# Starting iteration cap (v1.4.0). It used to be 1000 — a number chosen without justification.
-# The audit showed the danger: ANY claude launch inside the project folder joins the loop and
-# runs to the cap, so an accidental probe turned into a thousand iterations.
-# 25 is enough for a real version and cheap if triggered by accident; raise it by hand.
-max_iterations: 25
-attempts_per_task: {}
+# Limits are opt-in (v1.9.0). A project is born without an iteration cap and without a spending
+# cap: whoever wants a limit sets one, rather than a number nobody chose standing in the way.
+#
+# The price, recorded openly rather than softened. The v1.4.0 audit found that ANY claude launch
+# inside a project folder joins the loop, so with no cap an accidental probe runs unbounded. With
+# limits off, exactly two things stop the loop: a blocker, and released_version == current_version.
+# What remains visible is the silence watchdog (v1.8.0): it does not stop anything, but a state
+# file that stops changing is reported in every continuation.
+#
+# To set a limit, write a positive number here (and cap_usd below for spending):
+#   max_iterations: 25
+max_iterations: null
 progress_metrics:
   last_3_sessions_diff_lines: []
   last_3_sessions_test_diff: []
@@ -423,6 +480,14 @@ budget_metrics:
   cap_usd: null
 framework_version: "$FRAMEWORK_VERSION"
 next_step_prompt: "This is the initialisation step. Start stage 0 — goal setting. Read the project brief in docs/userdocs/ (if present), ask the user the clarifying questions you need, and fill in docs/ROADMAP.md."
+# The passport of the instruction above (v1.7.0). lib/update-state.mjs mints it on every write;
+# a project born without one would start out "unverified" and rely on a weaker heuristic, so the
+# very first instruction gets its passport here. Never edit this block by hand.
+next_step_prompt_meta:
+  version: "0.0.1"
+  stage: 0
+  prompt_file: null
+  at: "$TS"
 ---
 
 # Journal
@@ -499,6 +564,16 @@ fi
 echo
 echo "==> Bootstrap complete."
 echo
+# Replacing a file the project already had is the one action here a person may need to undo, and it
+# used to be visible only as a single line inside a hundred and fifty of output. It gets its own
+# block. Nothing is listed when nothing was replaced, so the block cannot become noise.
+if [ -n "${OVERWRITTEN:-}" ]; then
+  echo "The following existing files were REPLACED with the framework version:"
+  printf '%s' "$OVERWRITTEN"
+  echo "  (a .bak copy is kept next to each; .gitignore and .gitattributes are never replaced,"
+  echo "   they are merged, so your own rules stay where they are)"
+  echo
+fi
 # The closing instructions are the first thing a new user follows, so they must match the backend
 # that was actually installed. This block used to say "Start Claude Code" even after
 # `--backend opencode` — pointing the user at the wrong engine on their very first step.
@@ -509,6 +584,26 @@ if [ "$BACKEND" = "opencode" ]; then
   echo "  3) Start the loop from outside the session:"
   echo "       AGENT_BACKEND=opencode node core/supervisor.mjs --state docs/STATE.md"
   echo "     (OPENROUTER_API_KEY must be set. The supervisor runs a short self-check first.)"
+elif [ -n "${CLAUDECODE:-}" ] || [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+  # Installed from INSIDE a running Claude Code session. Claude Code reads .claude/settings.json
+  # when a session STARTS: the hooks are now in the file but not in the process, and the loop is not
+  # running. Announcing "the Ralph Loop is now active" here was false in exactly the situation where
+  # the framework matters most — a project begun without the loop, where somebody realised half-way
+  # through. Reported from a live project after a six-hour idle: the agent finished a turn, nothing
+  # brought it back, and the human believed the loop was watching.
+  #
+  # The marker is CLAUDECODE, the same one core/backend-factory.mjs already trusts to recognise this
+  # engine. CLAUDE_PROJECT_DIR was the other candidate and was rejected by measurement: Claude Code
+  # substitutes it into hook command strings but does not export it to the environment of commands
+  # the agent runs, so a check on it would never fire.
+  #
+  # The exit code stays 0 on purpose. The installation genuinely succeeded; failing it would break
+  # scripted installs and the suite's own end-to-end check, and would trade a false success message
+  # for a false failure. Visibility is bought with a block nobody can scroll past instead.
+  IN_SESSION=1
+  echo "  2) Leave this session:  /exit"
+  echo "  3) Return to it:        claude --continue"
+  echo "  4) From that point the Ralph Loop runs by itself."
 else
   echo "  2) Start Claude Code: claude"
   echo "  3) The Ralph Loop is now active. Give an initial prompt or wait"
@@ -528,5 +623,20 @@ Deploy the toolset once: bash <framework>/provision-toolset.sh
 (then provision-toolset.sh --verify for a report). See README.
 
 EOF
+
+# The warning goes LAST, after every other closing block. Printed in the middle of the summary it
+# would be true and useless: a live run showed three more sections scrolling past underneath it,
+# and the one thing the reader must not miss is that the loop is not running yet.
+if [ -n "${IN_SESSION:-}" ]; then
+  cat <<'EOF'
+!! ATTENTION: this install ran INSIDE a running Claude Code session.
+   The hooks are written to .claude/settings.json, but they are NOT loaded:
+   settings are read when a session starts, so this session does not have them.
+   THE LOOP IS NOT RUNNING YET.
+
+   Restart it:  /exit    then:  claude --continue
+
+EOF
+fi
 
 exit 0

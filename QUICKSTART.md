@@ -58,13 +58,20 @@ next_step_prompt: "Run `npm test`. One test is failing. Find the cause in the so
   test), fix it, make sure the suite passes, then commit with a descriptive message."
 ```
 
-Two fields are worth setting before your first run:
+**A fresh project has no limits at all** — that is deliberate, a limit belongs to whoever wants one.
+For a first run you almost certainly want one:
 
 ```yaml
 max_iterations: 5          # a low number while you watch what happens
 budget_metrics:
-  cap_usd: 5               # a hard ceiling; the loop stops when it is reached
+  cap_usd: 5               # see the caveat below
 ```
+
+The spending cap is enforced **only when the supervisor drives the loop**, because the supervisor is
+what receives the cost of a turn back from the engine. Under the Claude Code Stop hook nothing fills
+the counter, so the cap cannot fire — the loop says so in every continuation rather than letting it
+look like a guard. If you are running under the Stop hook, `max_iterations` is the limit that will
+actually stop you.
 
 ---
 
@@ -112,7 +119,7 @@ guard and it was put back before the next turn.
 
 ## 6. Stop it
 
-Four things stop the loop, and all are visible in `docs/STATE.md`:
+**By default two things stop the loop**, and both are visible in `docs/STATE.md`:
 
 - a **blocker** — write one yourself to stop immediately:
 
@@ -122,9 +129,14 @@ Four things stop the loop, and all are visible in `docs/STATE.md`:
       what: "stopping to review what it did"
   ```
 
-- `released_version == current_version` — the work is declared finished;
-- the **iteration cap**;
-- the **budget cap**.
+- `released_version == current_version` — the work is declared finished.
+
+Two more exist and are **off until you switch them on**: the iteration cap (`max_iterations`) and
+the spending cap (`budget_metrics.cap_usd`, supervisor only — see above).
+
+Nothing runs away silently in the meantime: three turns that change neither git nor `docs/STATE.md`
+make the loop write itself a `no_progress` blocker, and a state file that stops changing is reported
+in every continuation.
 
 An empty `next_step_prompt` does *not* stop anything — it means "decide from STATE and ROADMAP".
 
@@ -137,8 +149,26 @@ An empty `next_step_prompt` does *not* stop anything — it means "decide from S
   length of a turn is set by the task, not by the framework.
 - **Some turns produce no commit.** That is fine; two in a row and the loop escalates, three and it
   records a blocker.
-- **A guard refusal is not a bug.** Four irreversible operations are blocked. If you meant it, run
-  the command yourself outside the loop.
+- **A guard refusal is not a bug.** Four irreversible operations are blocked: destroying the
+  filesystem, formatting a disk, killing every agent process by name, and `git push --force`.
+  Everything else is allowed. If you meant it, run the command yourself outside the loop.
+
+---
+
+## If the guard gets in the way
+
+The default needs no configuration and is what you want almost always. `SAFETY_GUARD_MODE` changes
+it if you need something else:
+
+| Mode | Use it when |
+|---|---|
+| `arbiter` | **the default.** Leave it alone unless one of the rows below is you |
+| `confirm` | you would rather the agent argue for a dangerous command than be refused. It names the consequence and asks for a stated reason, and it watches a few more things than the default does |
+| `allow-all` | you want nothing denied at all, including `rm -rf /`. Your call, stated plainly |
+| `guard-only` | you are debugging the permission system itself; ordinary prompts come back |
+
+An unrecognised value keeps the default **and says so** — it will not silently pretend to have
+obeyed. The acting mode is written to `~/.claude/safety-guard.log`.
 
 ---
 
@@ -147,7 +177,7 @@ An empty `next_step_prompt` does *not* stop anything — it means "decide from S
 | Symptom | First thing to check |
 |---|---|
 | The loop does not continue after the first reply | Is the Stop hook registered? `grep ralph-loop .claude/settings.json` |
-| A permission prompt appears | `node tools/doctor-permissions.mjs` — it names the cause |
+| A permission prompt appears | From the framework clone: `node tools/doctor-permissions.mjs <your project>` — it names the cause, and `node tools/gen-settings.mjs --project <your project>` fixes it |
 | The loop refuses to start | Read the self-check output; it names the model and the problem |
 | "launch refused: the loop is already running" | Another loop holds the project. `cat docs/.loop.lock` |
 | It stopped and you do not know why | `grep -A5 blockers docs/STATE.md` |

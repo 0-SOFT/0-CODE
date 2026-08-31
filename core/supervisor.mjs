@@ -135,7 +135,13 @@ export async function runLoop({
   for (;;) {
     if (loops >= maxLoops) return finish({ stopped: 'max_loops', loops });
     const state = readState(stateFile);
-    const decision = decideContinuation(state, { sessionId });
+    const decision = decideContinuation(state, { sessionId, driver: 'supervisor' });
+
+    // v1.7.0: same as in the Stop hook — an instruction quietly dropped is a quiet failure.
+    if (decision.staleNextPrompt) {
+      process.stderr.write(
+        `[supervisor] the recorded step instruction was dropped — ${decision.staleNextPrompt.why}\n`);
+    }
 
     if (decision.action === 'stop') {
       if (decision.notify) notify(decision.notify.subject, decision.notify.body);

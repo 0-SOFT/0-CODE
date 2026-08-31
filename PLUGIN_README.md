@@ -67,15 +67,14 @@ audit_cycle: null
 verification_pending: false
 session_count: 0
 iteration: 0
-max_iterations: 25
-attempts_per_task: {}
+max_iterations: null        # no cap unless you set one (v1.9.0)
 progress_metrics:
   last_3_sessions_diff_lines: []
   last_3_sessions_test_diff: []
 budget_metrics:
   version_cost_usd: 0
   cap_usd: null
-framework_version: "1.5.0"
+framework_version: "1.11.0"
 next_step_prompt: "Stage 0. Read the project brief in docs/userdocs/ if it exists, or ask the user to describe the project, then produce docs/ROADMAP.md."
 ---
 

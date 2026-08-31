@@ -4,9 +4,9 @@ Every claim below was verified by running something and looking at the result �
 code and concluding it should work. Where a check produced an uncomfortable answer, the
 uncomfortable answer is here too.
 
-The reason this document exists: across three consecutive releases, **every serious defect was
-found by a live check while test coverage sat above 80%, and none was caught by a test**. Tests
-verify what you wrote. What breaks is what you *claimed*.
+The reason this document exists: across eleven releases, **every serious defect was found by a live
+check while test coverage sat above 80%, and none was caught by a test**. Tests verify what you
+wrote. What breaks is what you *claimed*.
 
 ---
 
@@ -185,10 +185,69 @@ This section is the point of the document.
 
 ---
 
+## The framework finds defects in itself
+
+**Setup.** Five consecutive releases, each one auditing a claim the project had made about its own
+behaviour — by running it, never by reading the code.
+
+| Release | The claim | What running it showed |
+|---|---|---|
+| v1.7.0 | the loop hands the agent the current step | It handed a live project an instruction written two versions earlier, announcing a blocker while `blockers` was empty — for dozens of iterations |
+| v1.9.0 | the coverage gate holds the suite to 80% | It was measuring **zero** modules. A parser rewrite had assumed a table shape this platform does not print, and the gate reported success on nothing |
+| v1.10.0 | `SAFETY_GUARD_MODE` selects the guard's mode | Any unrecognised value was replaced by the default in silence, so `SAFETY_GUARD_MODE=off` looked like switching the guard off while the full guard kept running |
+| v1.10.0 | an explicit `AGENT_BACKEND` always overrides | A misspelt value overrode nothing: it failed the supported-list test quietly and ran the other engine, at a different price, without a word |
+| v1.10.0 | the diagnostic tool tells you how to fix it | Its advice named a command that did nothing at all to somebody else's project |
+
+**The most useful one was self-inflicted.** While hunting this class, v1.10.0 left the usage header
+of a tool describing two flags an hour after three more were added. That produced the mechanical
+guard the class deserved: a test that parses every tool's usage block and asserts each advertised
+flag is actually read by the file.
+
+**What this does not prove.** That the remaining claims are true — only that this method finds them
+when they are not. Eleven releases in, it has yet to run clean.
+
+---
+
+## Curing a project it did not create
+
+**Setup.** A real project of the author's, unrelated to the framework, where the agent kept stopping
+for permission despite every mode being set to bypass.
+
+| Measurement | Result |
+|---|---|
+| Problems the diagnostic found | 4 |
+| Cause of the prompts | five `ask` rules, which outrank every mode **and** the hook's decision |
+| Problems after running the cure | 0 |
+| Files changed | 3, each with a timestamped backup |
+
+The interesting part is what did **not** work. The diagnostic's own advice — re-run the settings
+generator — did nothing, because that command only knew its own two files. Re-running the installer
+did not help either: it deep-merges, a merge unions arrays, and the template has no `ask` key with
+which to displace the project's. Verified rather than assumed, on a copy of the real settings.
+
+**What this does not prove.** That every broken configuration is curable this way. What the tool
+cannot mechanically decide — a hook reading a variable that does not exist, for instance — it names
+and leaves to a human, because silently deleting somebody's protection would repeat the mistake it
+is there to fix.
+
+---
+
 ## Current limits, stated plainly
 
-- **Uncommitted work is not protected.** `git reset --hard` and `git clean` are deliberately
-  allowed — they are routine, and blocking them costs more than it saves. Commit often.
+- **Uncommitted work is not protected by default.** `git reset --hard` and `git clean` are
+  deliberately allowed — they are routine, and blocking them costs more than it saves. In `confirm`
+  mode they ask for a stated reason instead, which is affordable there because a request to think
+  costs a rewritten command rather than a lost turn. Commit often either way.
+- **The spending cap only works under the supervisor.** It compares against a counter that the
+  supervisor fills from what the engine reports; the Claude Code Stop hook never sees a cost. Under
+  the hook the counter stays at zero and the cap cannot fire — the loop now says so in every
+  continuation instead of looking like a guard. Measured: three iterations through the real hook
+  moved the iteration count 0 → 3 and left the spend at 0.
+- **An agent that changes files while going nowhere is not caught.** `no_progress` measures turns
+  that change nothing at all. A turn that edits, reverts and edits again looks exactly like work.
+- **Danger hidden in an argument is mostly invisible.** `docker run -v /:/host` hands a container the
+  whole machine and is only noticed in `confirm` mode. The command parser is a heuristic, not a
+  shell.
 - **Code quality is not judged.** Nothing here evaluates whether what the agent wrote is correct.
   That is what tests and review are for.
 - **The spending guard is accurate to a step boundary**, not to the cent: a $0.002 cap aborted at

@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { head, segmentReason, destructiveReason } from '../../core/safety.mjs';
+import {
+  head, segmentReason, destructiveReason, destructiveVerdict, confirmationOf,
+} from '../../core/safety.mjs';
 
 // v1.2.1 — protection reduced to a minimum. Only rules where the consequence is unrecoverable AND
 // there is essentially no legitimate use inside a development loop survived. Everything else was
@@ -40,9 +42,13 @@ test('blocked: mass-killing the agent processes (the loop killing itself)', () =
 
 test('blocked: force-rewriting shared history', () => {
   for (const cmd of ['git push --force', 'git push -f origin main',
-    'git push origin main --force-with-lease']) {
+    'git push origin main --force']) {
     assert.ok(destructiveReason(cmd), `must be blocked: ${cmd}`);
   }
+  // v1.11.0 took --force-with-lease out of this list on purpose. It refuses to overwrite anything
+  // that appeared after your last fetch, so it is the careful form and the ordinary way to push a
+  // rebased branch of your own — a turn lost on it prevented nothing.
+  assert.equal(destructiveReason('git push origin main --force-with-lease'), null);
 });
 
 // THE key test of this version: everyday development commands. The v1.2.0 measurement produced
@@ -149,4 +155,74 @@ test('segmentReason and destructiveReason: empty and non-string input', () => {
   assert.equal(destructiveReason(undefined), null);
   assert.equal(destructiveReason(42), null);
   assert.equal(segmentReason(''), null);
+});
+
+// --- v1.11.0: rules gain a level, and a command can carry its own confirmation ----------------
+//
+// The idea, from the framework's owner: instead of refusing outright, name the consequence and make
+// the agent confirm with a reason. If it still decides to go ahead after reconsidering, that is an
+// argued decision in context rather than blind execution.
+//
+// The limit of that idea, and why levels exist at all: you are asking the same judgement twice — the
+// agent confirming is the agent that proposed the command. It helps exactly where the command has a
+// legitimate use (a force push after a rebase) and never where it has none (destroying the machine).
+// Allowing confirmation everywhere would turn the mode into allow-all with an extra keystroke.
+
+test('levels: catastrophic rules are hard, a force push is confirmable', () => {
+  const hard = ['rm -rf /', 'sudo rm -rf ~', 'mkfs.ext4 /dev/sdb1', 'taskkill /IM claude.exe'];
+  for (const cmd of hard) {
+    const v = destructiveVerdict(cmd);
+    assert.ok(v, `must be detected: ${cmd}`);
+    assert.equal(v.level, 'hard', `${cmd}: no context makes this the right answer`);
+  }
+  const push = destructiveVerdict('git push --force origin main');
+  assert.equal(push.level, 'confirmable', 'a force push has legitimate uses, so it can be argued for');
+});
+
+// The advisory level is the point of the version: it costs a rewritten command instead of a lost
+// turn, so rules dropped in v1.2.1 for being too expensive can come back — but only here.
+test('levels: advisory rules stay invisible unless asked for', () => {
+  const advisory = ['git clean -fdx', 'git reset --hard origin/main', 'docker run -v /:/host alpine ls'];
+  for (const cmd of advisory) {
+    assert.equal(destructiveVerdict(cmd), null, `${cmd} must not be detected by default`);
+    assert.equal(destructiveReason(cmd), null, `${cmd} must stay allowed in every existing mode`);
+    const v = destructiveVerdict(cmd, { advisory: true });
+    assert.ok(v, `${cmd} must be detected when advisory rules are on`);
+    assert.equal(v.level, 'advisory');
+  }
+});
+
+// destructiveReason is the old contract, used by the OpenCode adapter as well. It must keep
+// returning a plain string and must not start reporting advisory rules.
+test('the old destructiveReason contract is unchanged', () => {
+  assert.equal(typeof destructiveReason('rm -rf /'), 'string');
+  assert.equal(destructiveReason('git status'), null);
+  assert.equal(destructiveReason('git clean -fdx'), null, 'advisory rules must not leak into it');
+});
+
+// A careful force push refuses to overwrite work that appeared after your last fetch. Blocking it
+// alongside the blind form cost the loop a turn on an ordinary rebase-then-push.
+test('--force-with-lease is allowed, the blind force is not', () => {
+  assert.equal(destructiveReason('git push --force-with-lease origin feature'), null);
+  assert.equal(destructiveReason('git push --force-with-lease=refs/heads/x origin x'), null);
+  assert.ok(destructiveReason('git push --force origin main'));
+  assert.ok(destructiveReason('git push -f origin main'));
+  assert.ok(destructiveReason('git push origin main --force'));
+});
+
+test('confirmationOf: the stated reason is read out of the command', () => {
+  const cmd = 'git push --force origin f # safety-guard: confirmed my own branch after a rebase';
+  assert.equal(confirmationOf(cmd), 'my own branch after a rebase');
+  assert.equal(confirmationOf('git push --force origin f'), null, 'no marker, no confirmation');
+  assert.equal(confirmationOf('echo "# safety-guard: confirmed x"'), null,
+    'a marker inside quotes is text, not a decision');
+});
+
+// The marker must not hide the danger: the guard decides in the order "detect, then look for the
+// confirmation". If appending it made the command look harmless, it would be an escape hatch.
+test('a confirmation marker does not mask the danger', () => {
+  for (const cmd of ['rm -rf /', 'git push --force origin main']) {
+    assert.ok(destructiveReason(`${cmd} # safety-guard: confirmed a good reason here`),
+      `${cmd}: the danger must still be seen`);
+  }
 });

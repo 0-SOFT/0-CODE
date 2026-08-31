@@ -24,7 +24,11 @@
 │   │                                       # a thin adapter; nothing here knows which CLI it is talking to.
 │   │
 │   ├── gates.mjs                           # Should the loop continue? Four stop conditions: a blocker,
+│   ├── loop-limits.mjs                     # The outer backstop (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP)
+│   │                                       # and the rule that it sits above the loop's own cap.
 │   │                                       # released == current, the iteration cap, the budget cap.
+│   │                                       # Plus one signal that only ever warns: silence, when STATE
+│   │                                       # has stood untouched past stall_timeout_minutes.
 │   │                                       # A pure function — both loop drivers share it.
 │   ├── supervisor.mjs                      # The external loop driver (used by OpenCode; optional for Claude).
 │   │                                       # Lock, self-check, turn, retries, progress, state update.
@@ -35,7 +39,13 @@
 │   ├── preflight.mjs                       # One tiny turn before the loop: catches a changed output format
 │   │                                       # and a misconfiguration that would masquerade as a hiccup.
 │   ├── progress.mjs                        # Did the turn actually change anything (git, working tree, state)?
+│   │                                       # Both drivers use it — until v1.8.0 only the supervisor did.
+│   ├── turn-progress.mjs                   # The memory that lets a short-lived driver count turns: the
+│   │                                       # Stop hook exists only at the end of one, so the snapshot and
+│   │                                       # the count outlive the process. Never inside STATE — its hash
+│   │                                       # is one of the signals being measured.
 │   ├── safety.mjs                          # The four irreversible-command rules. THE single rule source
+│   │                                       # Rules carry a level: hard, confirmable, advisory.
 │   │                                       # for every engine.
 │   ├── permissions-policy.mjs              # The single permission policy. The `ask` category does not exist
 │   │                                       # here — it outranks every mode and guarantees a prompt.
@@ -62,13 +72,24 @@
 │   ├── yaml-mini.mjs                       # The YAML parser and serialiser for STATE.md. One source of truth.
 │   ├── parse-state.mjs                     # Read the frontmatter, print JSON.
 │   ├── update-state.mjs                    # Atomic deep-merge of a JSON patch (backup, temp file, rename).
+│   │                                       # Refuses to move the loop without a fresh step instruction.
+│   ├── step-instruction.mjs                # What "where the loop stands" means: the freshness
+│   │                                       # passport of next_step_prompt, minted here and checked
+│   │                                       # here. One source for the writer and the reader.
+│   ├── ignore-policy.mjs                   # "These paths never reach git", written once. Both .gitignore
+│   │                                       # files are rendered from it, so the copies cannot drift.
+│   ├── secret-scan.mjs                     # Looks for credentials in what git would actually stage —
+│   │                                       # it asks git, so no filename is special-cased.
 │   ├── backup.mjs / state-backup.mjs       # A ring buffer of five backups before every write.
 │   └── telegram-notify.sh / .ps1           # Notifications. The token lives in the URL, so nothing is echoed.
 │
 ├── tools/
 │   ├── gen-settings.mjs                    # Generates both settings files from the single policy.
+│   ├── gen-ignore.mjs                      # Renders both .gitignore files from lib/ignore-policy.mjs,
+│   │                                       # and --check fails when either has drifted from it.
 │   │                                       # --check fails if either drifted.
 │   ├── doctor-permissions.mjs              # "Why am I being asked for permission?" — names the cause.
+│   │                                       # gen-settings --project then cures what it names.
 │   └── provision-opencode.mjs              # Prepares an OpenCode project: config, instructions, guard plugin.
 │
 ├── templates/                              # Read from the framework directory; NOT copied into projects.
@@ -89,9 +110,11 @@
 ├── skills/orchestrator-wrapper/SKILL.md    # The contract the agent follows on every iteration:
 │                                           # read state → pick the stage → do one step → update state.
 │
-└── tests/                                  # 230 tests plus 117 smoke checks. No test framework — the project
+└── tests/                                  # 360 tests plus 129 smoke checks. No test framework — the project
     │                                       # is zero-dependency including its tooling.
     ├── run.mjs                             # Runner over node --test with a coverage gate.
+    ├── coverage-report.mjs                 # Reads Node's coverage table. Apart from run.mjs so it can be
+    │                                       # examined without running the suite it measures.
     ├── smoke.sh                            # End-to-end checks: hooks, gates, bootstrap, provisioning, guards.
     ├── unit/                               # Pure functions: gates, safety, parsing, routing, retries, lock.
     ├── integration/                        # Hooks, the supervisor, adapters, settings consistency.

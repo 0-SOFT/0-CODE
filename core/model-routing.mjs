@@ -50,6 +50,12 @@ const STEP_LEVEL = {
   format: 'low', lookup: 'low', routine: 'low', smoke: 'smoke',
 };
 
+// The step types this table knows. Exported so a caller can check a value before routing on it:
+// an unknown type falls back to `mid` below, which is right for a missing argument and wrong for a
+// misspelt one — you would quietly get a cheaper, weaker model than the step deserves. Every
+// production call site passes a literal, and a blind-spot test asserts those literals are in here.
+export const KNOWN_STEP_TYPES = Object.keys(STEP_LEVEL);
+
 // Return the model id for a step type. `preset` overrides the default (e.g. from .env).
 export function routeModel(stepType, preset = OPENROUTER_PRESET) {
   const level = STEP_LEVEL[stepType] || 'mid';

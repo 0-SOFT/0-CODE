@@ -48,7 +48,8 @@
     },
     "last_action_at": {
       "type": ["string", "null"],
-      "format": "date-time"
+      "format": "date-time",
+      "description": "When the loop last recorded an action. Written by lib/update-state.mjs; read since v1.8.0 by core/gates.mjs, which warns the agent when it has stood still longer than stall_timeout_minutes. An absent or unparseable value is never treated as silence."
     },
     "last_action": {
       "type": ["string", "null"]
@@ -91,13 +92,17 @@
       "description": "Ralph Loop iteration counter (incremented by Stop-hook)."
     },
     "max_iterations": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "Cap on Ralph Loop iterations before forced stop + alert."
+      "type": ["integer", "null"],
+      "description": "Cap on Ralph Loop iterations before a forced stop plus an alert. Opt-in since v1.9.0: absent, null, 0 or negative all mean there is no cap, and a fresh project is created without one. A positive number behaves as it always did. Keep it below CLAUDE_CODE_STOP_HOOK_BLOCK_CAP (core/loop-limits.mjs), or a single session is stopped by that backstop first and the cap you set is not the one that applies; the loop says so when it happens."
+    },
+    "stall_timeout_minutes": {
+      "type": ["number", "null"],
+      "exclusiveMinimum": 0,
+      "description": "How long docs/STATE.md may stay untouched before the continuation text warns the agent about it (v1.8.0). Default 20 when absent. This is a WARNING and never a stop: a false stop costs more than a false warning, because the loop exists to run without a human."
     },
     "attempts_per_task": {
       "type": "object",
-      "description": "Tracks 3-strikes blocker heuristic per task ID.",
+      "description": "DEAD FIELD, kept only so existing projects still validate (v1.11.0). It was meant to drive a three-strikes blocker; that mechanism was never implemented, and v1.11.0 removed the promise rather than building it — both halves of the idea are invisible to a driver, which sees change or no change, never a task or a failure. Nothing reads this field. New projects are no longer created with it.",
       "additionalProperties": {
         "type": "object",
         "properties": {
@@ -120,8 +125,8 @@
     "budget_metrics": {
       "type": "object",
       "properties": {
-        "version_cost_usd": { "type": "number", "minimum": 0 },
-        "cap_usd": { "type": ["number", "null"], "minimum": 0 }
+        "version_cost_usd": { "type": "number", "minimum": 0, "description": "Spend accumulated for the current version. Written by core/supervisor.mjs only, which gets the turn cost back from the engine. The Stop hook cannot write it: the Stop payload carries a transcript path, and the transcript holds token counts but no cost field. So under the Stop hook this stays at 0 and cap_usd cannot fire — the loop reports that rather than pretending to guard." },
+        "cap_usd": { "type": ["number", "null"], "minimum": 0, "description": "Spending cap for the current version. Opt-in: absent, null or 0 mean no cap, and a fresh project is created without one. Enforced only where version_cost_usd is actually written (the supervisor)." }
       }
     },
     "released_version": {
@@ -131,13 +136,23 @@
     },
     "next_step_prompt": {
       "type": ["string", "null"],
-      "description": "Text fed back to Claude on Ralph Loop continuation."
+      "description": "The instruction for the next iteration. It is a CACHE of what to do now; the real source is where the loop stands (current_version + current_stage + current_prompt_file, read against the roadmap). Since v1.7.0 lib/update-state.mjs refuses a patch that moves any of those three fields without also rewriting this one. Setting it to null is allowed and means \"work it out from STATE\"."
+    },
+    "next_step_prompt_meta": {
+      "type": ["object", "null"],
+      "description": "The freshness passport of next_step_prompt, written by lib/update-state.mjs on every write. NEVER edit it by hand: a passport maintained by hand would be a second cache with the same disease. core/gates.mjs compares it against the live position and refuses to hand out an instruction written for a position the loop has left; `at` is for humans reading the file and takes no part in the check. Absent in projects created before v1.7.0 — those fall back to a conservative heuristic over the version named in the text.",
+      "properties": {
+        "version": { "type": ["string", "null"], "description": "current_version at the time the instruction was written." },
+        "stage": { "type": ["integer", "null"], "description": "current_stage at the time the instruction was written." },
+        "prompt_file": { "type": ["string", "null"], "description": "current_prompt_file at the time the instruction was written." },
+        "at": { "type": ["string", "null"], "description": "When it was written (ISO 8601). Diagnostic only." }
+      }
     },
     "roadmap_version": { "type": "string" },
     "tz_version": { "type": "string" },
     "framework_version": {
       "type": "string",
-      "description": "Version of the autonomous framework that bootstrapped this project."
+      "description": "The framework release that bootstrapped this project. A historical fact, written once at bootstrap and deliberately NOT updated afterwards: overwriting it would erase the answer to \"which release created this project\", which is exactly what you need when diagnosing an old project. The version RUNNING right now is a different fact and is not stored here at all — read it from .claude-plugin/plugin.json."
     },
     "versions_since_last_audit": {
       "type": "integer",

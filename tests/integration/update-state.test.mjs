@@ -58,3 +58,100 @@ test('update-state: leaves no .tmp.* file behind on success (atomicity)', () => 
     assert.deepEqual(leftovers, []);
   } finally { p.cleanup(); }
 });
+
+// --- v1.7.0: the barrier and the freshness stamp -----------------------------------------------
+//
+// Reported from a live project: the orchestrator moved current_version and current_prompt_file for
+// dozens of iterations while leaving next_step_prompt untouched, so the loop kept handing out an
+// instruction written two versions earlier. Nothing on the write side objected. Now it does.
+
+test('barrier: moving the version without a new instruction is refused, STATE untouched', () => {
+  const p = mkTempProject({ current_version: '1.6.1', next_step_prompt: 'old instruction' });
+  try {
+    const r = apply(p.stateFile, '{"current_version":"1.7.0"}');
+    assert.notEqual(r.status, 0, 'the write must be refused');
+    assert.match(r.stderr, /next_step_prompt/, 'the message must name what is missing');
+    assert.equal(readFrontmatter(p.stateFile).current_version, '1.6.1', 'nothing was written');
+  } finally { p.cleanup(); }
+});
+
+test('barrier: moving the stage or the prompt file is refused the same way', () => {
+  const p = mkTempProject({ current_stage: 2, current_prompt_file: 'docs/prompts/a.md' });
+  try {
+    assert.notEqual(apply(p.stateFile, '{"current_stage":3}').status, 0);
+    assert.notEqual(apply(p.stateFile, '{"current_prompt_file":"docs/prompts/b.md"}').status, 0);
+  } finally { p.cleanup(); }
+});
+
+test('barrier: writing the same value is not a move, so it passes', () => {
+  const p = mkTempProject({ current_version: '1.6.1', current_stage: 2 });
+  try {
+    const r = apply(p.stateFile, '{"current_version":"1.6.1","current_stage":2,"iteration":3}');
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFrontmatter(p.stateFile).iteration, 3);
+  } finally { p.cleanup(); }
+});
+
+// The barrier must be invisible to the two loop drivers. If it were not, a misfire would stop the
+// loop dead: both the Stop hook and the supervisor treat a failed STATE write as fatal.
+test('barrier: the loop drivers\' own patches are never affected', () => {
+  const p = mkTempProject({ current_version: '1.6.1', current_stage: 2 });
+  try {
+    // The Stop hook's patch.
+    assert.equal(apply(p.stateFile,
+      '{"iteration":2,"last_session_id":"s1","session_count":1}').status, 0);
+    // The supervisor's patch, including the cost and a no_progress blocker.
+    const r = apply(p.stateFile, JSON.stringify({
+      iteration: 3, last_session_id: 's1', session_count: 1,
+      budget_metrics: { version_cost_usd: 1.25 },
+      blockers: [{ type: 'no_progress', detail: 'three empty turns' }],
+    }));
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFrontmatter(p.stateFile).iteration, 3);
+  } finally { p.cleanup(); }
+});
+
+test('stamp: a written instruction gets a passport of the position it was written for', () => {
+  const p = mkTempProject({ current_version: '1.6.1', current_stage: 2 });
+  try {
+    const r = apply(p.stateFile, JSON.stringify({
+      current_version: '1.7.0', current_stage: 3,
+      current_prompt_file: 'docs/prompts/1.7.0_x.md',
+      next_step_prompt: 'stage 3: write the report',
+    }));
+    assert.equal(r.status, 0, r.stderr);
+    const fm = readFrontmatter(p.stateFile);
+    assert.equal(fm.next_step_prompt_meta.version, '1.7.0');
+    assert.equal(fm.next_step_prompt_meta.stage, 3);
+    assert.equal(fm.next_step_prompt_meta.prompt_file, 'docs/prompts/1.7.0_x.md');
+    assert.match(String(fm.next_step_prompt_meta.at), /^\d{4}-\d{2}-\d{2}T/);
+  } finally { p.cleanup(); }
+});
+
+// The passport describes the position AFTER the merge. Half of it can come from the patch and the
+// other half from what was already in STATE, so minting it from the patch alone would be wrong.
+test('stamp: the passport describes the merged position, not just the patch', () => {
+  const p = mkTempProject({ current_version: '1.6.1', current_stage: 2,
+    current_prompt_file: 'docs/prompts/kept.md' });
+  try {
+    apply(p.stateFile, '{"current_version":"1.7.0","next_step_prompt":"go on"}');
+    const meta = readFrontmatter(p.stateFile).next_step_prompt_meta;
+    assert.equal(meta.version, '1.7.0', 'from the patch');
+    assert.equal(meta.prompt_file, 'docs/prompts/kept.md', 'from what STATE already held');
+  } finally { p.cleanup(); }
+});
+
+// Clearing the instruction on purpose stays possible — it means "work it out from STATE", the
+// contract pinned down in v1.3.0. It is the accidental case the barrier is aimed at.
+test('stamp: clearing the instruction explicitly is allowed and removes the passport', () => {
+  const p = mkTempProject({ current_version: '1.6.1' });
+  try {
+    apply(p.stateFile, '{"next_step_prompt":"something"}');
+    assert.ok(readFrontmatter(p.stateFile).next_step_prompt_meta);
+    const r = apply(p.stateFile, '{"current_version":"1.7.0","next_step_prompt":null}');
+    assert.equal(r.status, 0, r.stderr);
+    const fm = readFrontmatter(p.stateFile);
+    assert.equal(fm.current_version, '1.7.0');
+    assert.equal(fm.next_step_prompt_meta, undefined, 'an empty instruction has nothing to validate');
+  } finally { p.cleanup(); }
+});

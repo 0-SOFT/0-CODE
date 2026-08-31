@@ -1,6 +1,6 @@
 # 0-CODE — an autonomous development loop for Claude Code and OpenCode
 
-> **Version:** v1.6.1 · MIT licence · zero runtime dependencies
+> **Version:** v1.12.0 · MIT licence · zero runtime dependencies
 
 Give an AI agent a goal and a roadmap. It plans, writes code, runs tests, commits, and keeps going
 across sessions — until the work is done, the budget runs out, or it hits something only a human
@@ -75,11 +75,51 @@ development loop:
 Everything else is allowed. Losses inside a repository are recoverable from git, and autonomy is
 worth more than a rule that fires on `git clean`.
 
+**Three modes, and switching off is explicit.** `SAFETY_GUARD_MODE` picks one:
+
+| Mode | What it does |
+|---|---|
+| `arbiter` (default) | the hook decides on every call, so no prompt appears anywhere |
+| `guard-only` | denies the destructive, stays silent otherwise — ordinary prompts come back |
+| `allow-all` | nothing is ever denied, including `rm -rf /` |
+| `confirm` | names the consequence and asks the agent to argue for it, instead of refusing |
+
+**The confirm mode** exists because the framework does not know your task and the agent does. A rule
+with legitimate uses — a force push, wiping untracked files — is refused with the consequence spelled
+out and a way to proceed: re-issue the command with `# safety-guard: confirmed <why this is right
+here>`. A throwaway reason is not accepted, and every confirmation is written to the log, so a
+decision can be reviewed afterwards rather than merely trusted.
+
+Two things stay out of that bargain. Rules where no task context could make the answer "yes" —
+destroying the filesystem, formatting a disk, killing every session — cannot be confirmed at all.
+And the mode carries extra rules that exist nowhere else (`git clean`, `git reset --hard`, mounting
+the filesystem root into a container): a request to think costs a rewritten command, where a refusal
+costs the loop a turn, so this mode can afford to notice more.
+
+A value the guard does not recognise keeps the safe default **and says so**, instead of pretending to
+have obeyed: `SAFETY_GUARD_MODE=off` used to look like switching the guard off while the full guard
+kept running. The acting mode is written into the decision and into `~/.claude/safety-guard.log`, so
+"I turned it off" is something you can check rather than remember.
+
 **Secrets are never blocked.** If a commit picks up a file that looks like key storage, you get one
 line in the log and a notification if you configured one. The decision stays yours.
 
-**What this cannot do:** it will not stop an agent from writing bad code, and it will not protect
-uncommitted work. Commit often.
+**Still being asked for permission?** An `ask` rule in the settings outranks every mode *and* the
+hook's decision, so no toggle can remove that prompt. Find out why, then fix it:
+
+```bash
+node tools/doctor-permissions.mjs <project>      # names the cause
+node tools/gen-settings.mjs --project <project>  # fixes it, with a backup
+```
+
+**What this cannot do**, stated plainly rather than discovered later:
+
+- it will not stop an agent from writing bad code, and it will not protect uncommitted work;
+- the command parser is a heuristic, not a shell — exotic quoting can fool it in either direction;
+- danger expressed as an argument rather than a command is mostly invisible: `docker run -v /:/host`
+  hands a container the whole machine and is only noticed in `confirm` mode;
+- a script the agent writes and then runs is one opaque command to the guard;
+- four rules can only ever be wrong in four ways, which is the point of keeping the set that small.
 
 ---
 
@@ -135,12 +175,20 @@ AGENT_BACKEND=opencode node core/supervisor.mjs --state docs/STATE.md
 
 ## Stopping the loop
 
-Exactly four things stop it, and all of them are visible in `docs/STATE.md`:
+By default **two** things stop it, and two more are available on request. All four are visible in
+`docs/STATE.md`:
 
 - a **blocker** you or the agent wrote into `blockers:`;
 - `released_version == current_version` — the roadmap is finished;
-- the **iteration cap** (`max_iterations`, 25 in a fresh project);
-- the **budget cap** (`budget_metrics.cap_usd`).
+- the **iteration cap** (`max_iterations`) — **off unless you set it**;
+- the **budget cap** (`budget_metrics.cap_usd`) — **off unless you set it**, and enforced only
+  under `core/supervisor.mjs`: nothing fills the spend counter when the Stop hook drives the loop,
+  so a cap set there is reported as unenforceable rather than left to look like a guard.
+
+Since v1.9.0 both caps are opt-in. A fresh project has neither, so in practice two things stop it:
+a blocker and a finished roadmap. What still makes a runaway visible is the no-progress detector —
+three turns that change nothing and the loop writes itself a `no_progress` blocker — and the
+silence watchdog, which reports a state file that has stopped changing.
 
 An empty `next_step_prompt` does **not** stop the loop — it means "decide from STATE and ROADMAP".
 
@@ -163,8 +211,8 @@ An empty `next_step_prompt` does **not** stop the loop — it means "decide from
 ## Tests
 
 ```bash
-node tests/run.mjs --coverage-min=80    # 234 tests, coverage gate over source modules
-bash tests/smoke.sh                     # 111 end-to-end checks, plus 6 skipped aloud
+node tests/run.mjs --coverage-min=80    # 360 tests, coverage gate over source modules
+bash tests/smoke.sh                     # 119 end-to-end checks, plus 10 skipped aloud
 ```
 
 Both run on Windows and Linux with no external test framework — the project has zero dependencies,

@@ -47,7 +47,7 @@ export function isJunkAllowRule(rule) {
 }
 
 // The main check: a list of problems, each with a ready-made cure.
-export function diagnose(levels) {
+export function diagnose(levels, { projectHint = '<project directory>' } = {}) {
   const problems = [];
   for (const lv of levels) {
     if (lv.state === 'BROKEN') {
@@ -67,7 +67,7 @@ export function diagnose(levels) {
         level: lv.name,
         problem: `ask rules are present (${ask.length}): ${ask.join(', ')}`,
         consequence: 'an ask rule outranks any mode, including bypassPermissions, and outranks the hook decision',
-        cure: 'move dangerous ones into deny and the rest into allow (node tools/gen-settings.mjs)',
+        cure: `remove the ask category entirely — the guard hook decides instead: node tools/gen-settings.mjs --project ${projectHint}`,
       });
     }
 
@@ -77,7 +77,7 @@ export function diagnose(levels) {
         level: lv.name,
         problem: 'permissions.defaultMode is not set',
         consequence: 'the mode depends on a manual toggle in the interface and is lost between sessions',
-        cure: `add "defaultMode": "${DEFAULT_MODE}" (node tools/gen-settings.mjs)`,
+        cure: `add "defaultMode": "${DEFAULT_MODE}": node tools/gen-settings.mjs --project ${projectHint}`,
       });
     }
 
@@ -87,7 +87,7 @@ export function diagnose(levels) {
         level: lv.name,
         problem: `hyper-specific allow entries (${junk.length})`,
         consequence: 'traces of the "always allow" button: they almost never match again while the list keeps growing',
-        cure: 'replace them with globs (for example Bash(git commit *)) or delete them',
+        cure: `delete them: node tools/gen-settings.mjs --project ${projectHint}${'' } (add --user for the user-level file)`,
         entries: junk,
       });
     }
@@ -118,7 +118,7 @@ export function diagnose(levels) {
       level: 'project',
       problem: 'the safety-guard arbiter hook is not registered',
       consequence: 'decisions fall to the ordinary permission system, so prompts become possible and destructive commands rely on globs alone',
-      cure: 'run node tools/gen-settings.mjs',
+      cure: `run node tools/gen-settings.mjs --project ${projectHint}`,
     });
   }
   return problems;
@@ -136,7 +136,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     console.log(`  ${lv.name.padEnd(16)} ${lv.state.padEnd(10)} ${mode ? 'mode: ' + mode : ''} ${lv.path}`);
   }
 
-  const problems = diagnose(levels);
+  const problems = diagnose(levels, { projectHint: JSON.stringify(projectDir) });
   if (!problems.length) {
     console.log('\nOK No problems found. If a prompt still appears, it may be folder trust,');
     console.log('   an MCP server tool approval, or a domain approval: those prompts are not');

@@ -21,6 +21,9 @@
 
 import { checkFreshness } from '../lib/step-instruction.mjs';
 import { exceedsBackstop } from './loop-limits.mjs';
+import { summariseJobs, terminalAdvice } from './long-jobs.mjs';
+import { findDecisionFor, summariseDecision } from './decision-record.mjs';
+import { reviewStatus, reviewDirective } from './roadmap-review.mjs';
 
 // Loop "adoption" logic (v0.5.9 — the root fix for continuity):
 // last_session_id in STATE records the last session that WROTE to it, not the live one. When a
@@ -35,9 +38,16 @@ export const DEFAULT_STALL_MINUTES = 20;
 
 // Minutes since the last recorded action, or null when that cannot be known.
 //
-// lib/update-state.mjs has written last_action_at since the first version, and until v1.8.0 no line
-// of core/, lib/ or hooks/ ever read it: the field was decoration. Reading it closes a case the
-// turn-based progress detector cannot see — turns that DO happen, are long, and produce nothing.
+// Reading it closes a case the turn-based progress detector cannot see — turns that DO happen, are
+// long, and produce nothing.
+//
+// v1.14.0 — A CORRECTION, because this comment used to be wrong in a way that mattered. It claimed
+// "lib/update-state.mjs has written last_action_at since the first version". No line of that tool
+// ever did: agents filled the field in by hand, in whatever patch they remembered it in. So from
+// v1.8.0 to v1.14.0 this watchdog was reading a hand-maintained cache and reporting silence on
+// projects that had just changed — measured here at 355 minutes of "silence" immediately after two
+// state patches. The tool now stamps the field itself, and skips its own drivers' bookkeeping so
+// that the watchdog cannot be satisfied by the loop's own counting.
 //
 // Null is returned for an absent or unparseable stamp, and null is never silence: a project created
 // before v1.8.0, or the very first turn of any project, has nothing to be silent about. A clock
@@ -51,7 +61,10 @@ export function minutesSinceAction(st, now = Date.now()) {
   return minutes >= 0 ? minutes : null;      // a clock skew into the future is not silence either
 }
 
-export function decideContinuation(state, { sessionId = '', driver = '' } = {}) {
+// v1.16.0: `projectDir` is how the gate can look for a decision record. It is optional, and when
+// it is absent the gate simply says nothing about records rather than guessing at a path — a
+// driver that has not been updated must not start reporting things it cannot know.
+export function decideContinuation(state, { sessionId = '', driver = '', jobs = null, projectDir = null } = {}) {
   const st = state && typeof state === 'object' ? state : {};
 
   const blockers = Array.isArray(st.blockers) ? st.blockers : [];
@@ -159,8 +172,29 @@ export function decideContinuation(state, { sessionId = '', driver = '' } = {}) 
       'like work from here.');
   }
 
+  // Long-running external work (v1.13.0). Waiting used to be invisible: a turn spent polling and a
+  // turn that had hung looked identical from here, and the human had to ask. The drivers inspect the
+  // jobs recorded in STATE — a few system calls, never a wait — and the answer goes into the block
+  // that already carries the machine truth.
+  const jobLine = summariseJobs(jobs);
+  if (jobLine) header.push(`jobs: ${jobLine}`);
+
+  // v1.14.0: a record that has stopped happening is stale by definition, but only the agent knows
+  // whether it took the result, so the registry asks instead of deleting. Left unsaid, terminal
+  // records accumulate until the line nobody reads is the line that mattered.
+  const overLine = terminalAdvice(jobs);
+  if (overLine) header.push(overLine);
+
   // An explicit cap above the backstop is silently truncated by Claude Code, so it is named here
   // rather than left to be discovered by counting iterations that never arrive.
+  // v1.16.0 — WAS A DECISION TAKEN, OR JUST TAKEN FIRST? Measured across this project: 15 % of
+  // reports name a single rejected alternative. The mechanism cannot judge whether this version
+  // needed a decision record, so it does the one thing that closes the silent case: it says every
+  // turn whether one exists. A flat decision can no longer look exactly like a considered one.
+  if (projectDir) {
+    header.push(summariseDecision(findDecisionFor(projectDir, current), current));
+  }
+
   const overBackstop = exceedsBackstop(maxIter);
   if (overBackstop) header.push(`WARNING: ${overBackstop.why}`);
 
@@ -180,7 +214,17 @@ export function decideContinuation(state, { sessionId = '', driver = '' } = {}) 
       'core/supervisor.mjs. See docs/failure-modes.md.');
   }
 
-  const reason = `${header.join('\n')}\n\n[STEP INSTRUCTION]\n${stepInstruction}`;
+  // v1.16.0 — THE PLAN GETS RE-EXAMINED. When the review is due the step instruction is REPLACED,
+  // not decorated: appended, the directive becomes one more paragraph at the end of a long text
+  // and the agent carries on with what it was already doing. That is how a roadmap goes
+  // twenty-five releases without a single version being changed.
+  const review = reviewStatus(st);
+  if (review.due) {
+    header.push(`ROADMAP REVIEW DUE: ${review.since} turns since the plan was last checked (threshold ${review.every}). This turn's instruction has been replaced by the review.`);
+  }
+  const instructionForTurn = review.due ? reviewDirective(stepInstruction, review) : stepInstruction;
+
+  const reason = `${header.join('\n')}\n\n[STEP INSTRUCTION]\n${instructionForTurn}`;
   const systemMessage = `Ralph Loop: iter ${iterationLabel} (v${current})` +
     `${adopted ? ' [adopted loop from prior session]' : ''}` +
     `${staleNextPrompt ? ' [stale step instruction dropped]' : ''}`;
@@ -188,6 +232,6 @@ export function decideContinuation(state, { sessionId = '', driver = '' } = {}) 
   return {
     action: 'continue', stopCause: null, notify: null,
     next: { iteration: nextIter, lastSessionId: sessionId, sessionCount: nextCount },
-    reason, systemMessage, adopted, stepInstruction, staleNextPrompt,
+    reason, systemMessage, adopted, stepInstruction, staleNextPrompt, roadmapReview: review,
   };
 }

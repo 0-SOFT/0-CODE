@@ -1,6 +1,6 @@
 # 0-CODE — an autonomous development loop for Claude Code and OpenCode
 
-> **Version:** v1.12.0 · MIT licence · zero runtime dependencies
+> **Version:** v1.19.0 · MIT licence · zero runtime dependencies
 
 Give an AI agent a goal and a roadmap. It plans, writes code, runs tests, commits, and keeps going
 across sessions — until the work is done, the budget runs out, or it hits something only a human
@@ -54,6 +54,12 @@ Two drivers, same rules: a **Stop hook** for Claude Code (the loop lives inside 
 | Spending is discovered after the fact | Cost accumulates in state, and a per-turn guard aborts mid-turn when the cap is passed |
 | Two copies race over the same project | A file lock: a live owner refuses the second launch, a dead one is taken over |
 | The agent deletes its own guardrails | The guard plugin lives outside the working directory and is restored before every turn |
+| A turn is spent asleep waiting for a test run | Long jobs are recorded in state; every turn reports whether each is running, overdue, finished or **dead** — in milliseconds, because checking is not waiting |
+| A second session in the same project fights the first for the loop | Ownership is proved by something that lives as long as the claimant does; the second session is told who holds the loop and works as an ordinary session |
+| The agent takes the first idea that works | A decision record with at least three options, each scored and grounded in a measurement or a named assumption; whether one exists is printed every turn |
+| A plan written once is followed for ever | Every so many turns the step instruction is *replaced* by a review of the remaining plan against what the work has since shown |
+| "Ready for release" rests on the agent's word | Audit findings become a machine-readable ledger, and `/productionauditloop` runs until P0–P2 reach zero **by that data**, not by declaration |
+| A released version's acceptance criteria say nothing | Each one is closed with evidence or declares itself unmet; a guard turns red on a criterion that stays silent |
 
 Every row above exists because it actually happened during development, not because it sounded
 prudent. The evidence is in [docs/PROVEN.md](docs/PROVEN.md).
@@ -119,7 +125,10 @@ node tools/gen-settings.mjs --project <project>  # fixes it, with a backup
 - danger expressed as an argument rather than a command is mostly invisible: `docker run -v /:/host`
   hands a container the whole machine and is only noticed in `confirm` mode;
 - a script the agent writes and then runs is one opaque command to the guard;
-- four rules can only ever be wrong in four ways, which is the point of keeping the set that small.
+- four rules can only ever be wrong in four ways, which is the point of keeping the set that small;
+- **the Stop hook cannot survive the platform going down** — it lives inside the process that dies,
+  so there is no turn to run and nothing to restart it. `core/supervisor.mjs` is an external driver
+  and does survive it, retrying transient failures with a growing pause.
 
 ---
 
@@ -200,6 +209,7 @@ An empty `next_step_prompt` does **not** stop the loop — it means "decide from
 |---|---|
 | [QUICKSTART.md](QUICKSTART.md) | from zero to the first autonomous commit |
 | [GUIDELINE.md](GUIDELINE.md) | architecture and mechanics, and why each decision was made |
+| [docs/two-modes.md](docs/two-modes.md) | the two ways to drive the loop, side by side: what each can and cannot do |
 | [docs/PROVEN.md](docs/PROVEN.md) | what was verified by experiment, with numbers and limits |
 | [docs/failure-modes.md](docs/failure-modes.md) | what breaks, how it looks, what to do |
 | [STRUCTURE.tree](STRUCTURE.tree) | annotated map of every file |
@@ -211,8 +221,8 @@ An empty `next_step_prompt` does **not** stop the loop — it means "decide from
 ## Tests
 
 ```bash
-node tests/run.mjs --coverage-min=80    # 360 tests, coverage gate over source modules
-bash tests/smoke.sh                     # 119 end-to-end checks, plus 10 skipped aloud
+node tests/run.mjs --coverage-min=80    # the whole suite, with the coverage gate over source modules
+bash tests/smoke.sh                     # end-to-end checks; a fresh clone announces the ones it skips
 ```
 
 Both run on Windows and Linux with no external test framework — the project has zero dependencies,

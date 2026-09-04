@@ -8,7 +8,7 @@ description: >-
   Use this skill at the start of every iteration in any project bootstrapped by
   the framework.
 origin: 0-code-autonomous-framework
-version: 1.12.0
+version: 1.19.0
 ---
 
 # orchestrator-wrapper
@@ -140,6 +140,11 @@ not a proxy for capability.
   consequence and still judge the command correct — the reason goes into a log a human reads, and
   "confirmed because I want to run it" is an answer that will be read as exactly that. If the
   consequence changes your mind, the guard did its job; find another way.
+- **Never spend a turn waiting.** If work takes longer than a turn, start it in the background,
+  record it under `running_jobs` in STATE, and end the turn. The next continuation tells you whether
+  it is running, finished, died or overdue. Blocking on `until … sleep` spends the loop's only
+  resource on nothing, and waits for ever if the job dies before writing its marker — measured at
+  447 sleeps in a single real session.
 - **One iteration, one step.** Do not batch five versions into one turn — the loop exists to make
   progress visible.
 - **Record the reasoning where it belongs.** Decisions go into reports; state goes into STATE.
@@ -147,3 +152,33 @@ not a proxy for capability.
 - **If the instructions and the behaviour disagree, the behaviour wins** — and then fix the
   instructions. Several defects in this framework survived for versions because a document said
   something nobody re-checked.
+
+## Decisions and the plan (v1.16.0)
+
+Before choosing between paths that do not reduce to one another — a new module, a change of
+contract, the shape of a mechanism, a threshold behaviour depends on — write a decision record
+under `docs/decisions/<version>_<short-name>.md`. At least three options, each with `impact`,
+`confidence`, `cost` (1..10) and a `basis` that is a measurement or a named assumption; a
+`rejected_because` on everything not chosen; a `what_would_disprove` that could actually be
+checked. Never write the score down — it is computed from its parts, and a stored copy will one
+day disagree with them. Measured reason for the rule: across this framework's history only 15 %
+of reports ever named a single rejected alternative.
+
+Every ten turns the loop replaces your step instruction with a roadmap review. Read the remaining
+versions against what the work has since shown, change the plan where it should change, and record
+`roadmap_reviewed_at_iteration` together with a substantive `roadmap_review_note` in the same
+patch — one without the other is refused. Measured reason: no version has ever been cancelled,
+dropped or reordered in this project's roadmap across twenty-five-plus releases.
+
+## Acceptance criteria (v1.18.0)
+
+A criterion of a released version is either closed with evidence written into the line, or it says
+out loud that it was not met and why. The marker is a shape rather than a word — a bold opening
+ending in a colon, then a substantive reason — so it works in any language, and the reason is
+checked by the same function used everywhere else. A guard in `tests/smoke.sh` turns red on a
+criterion that says nothing.
+
+Measured reason: forty criteria sat open and silent across released versions, and one of them —
+a coverage threshold for branches — was independently rediscovered by an audit four versions later.
+Never tick a box to reduce the number: of the forty triaged, nine closed, which is how many had
+actually been verified.

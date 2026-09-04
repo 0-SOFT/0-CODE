@@ -46,10 +46,22 @@
     "current_prompt_file": {
       "type": ["string", "null"]
     },
+    "roadmap_reviewed_at_iteration": {
+      "type": ["integer", "null"],
+      "description": "The iteration at which docs/ROADMAP.md was last checked against what had actually been built. Read by core/roadmap-review.mjs: once the distance from it reaches roadmap_review_every, the loop REPLACES that turn's step instruction with a mandatory review. Absent means never reviewed, and never reviewed counts the whole distance travelled — treating it as \"recently\" would let exactly the projects that need this most escape it. Writing this field without a substantive roadmap_review_note is refused by lib/update-state.mjs with exit code 3."
+    },
+    "roadmap_review_note": {
+      "type": ["string", "null"],
+      "description": "What came of the last roadmap review: what changed in the plan, or — if nothing changed — why it still holds and what was examined to be sure. Checked for substance by the same function the safety guard uses for confirmations (core/permission-decision.mjs), so \"all fine\" does not pass. Measured reason for the guard: across 25+ releases of this project not one version was ever cancelled, dropped or reordered, which is the state a review that cannot fail produces."
+    },
+    "roadmap_review_every": {
+      "type": ["integer", "null"],
+      "description": "How many turns may pass between roadmap reviews. Absent means the default of ten, chosen in the open in docs/decisions/1.16.0_review-threshold.md: at the measured rate of 2-3 turns per version, ten turns is three to four finished versions. null, 0 or a negative number switch the review off entirely, exactly as they do for every other limit since v1.9.0. An absent field differs from an explicit null on purpose: an uninvited LIMIT can stop work that should continue, while an uninvited PRACTICE has the opposite failure — its absence is the measured defect."
+    },
     "last_action_at": {
       "type": ["string", "null"],
       "format": "date-time",
-      "description": "When the loop last recorded an action. Written by lib/update-state.mjs; read since v1.8.0 by core/gates.mjs, which warns the agent when it has stood still longer than stall_timeout_minutes. An absent or unparseable value is never treated as silence."
+      "description": "When the loop last recorded an action. Stamped by lib/update-state.mjs since v1.14.0 — before that the description said the same thing and no code did it, so agents filled the field in by hand and the watchdog read a cache nobody maintained. Patches that only carry driver bookkeeping (iteration, last_session_id, session_count, budget_metrics) do NOT stamp it: both drivers write every turn, and a watchdog fed by the loop counting itself could never fire. Read since v1.8.0 by core/gates.mjs, which warns the agent when the project has stood still longer than stall_timeout_minutes. An absent or unparseable value is never treated as silence."
     },
     "last_action": {
       "type": ["string", "null"]
@@ -137,6 +149,22 @@
     "next_step_prompt": {
       "type": ["string", "null"],
       "description": "The instruction for the next iteration. It is a CACHE of what to do now; the real source is where the loop stands (current_version + current_stage + current_prompt_file, read against the roadmap). Since v1.7.0 lib/update-state.mjs refuses a patch that moves any of those three fields without also rewriting this one. Setting it to null is allowed and means \"work it out from STATE\"."
+    },
+    "running_jobs": {
+      "type": "array",
+      "description": "Long-running external work the loop knows about (v1.13.0). Recording a job is what lets the agent START it and END THE TURN instead of blocking on `until ... sleep`, which spends the loop's only resource on nothing and waits for ever if the job dies. Each turn the drivers classify every entry in milliseconds: alive without its marker = running, gone with the marker = finished, gone WITHOUT it = died, alive past expect_by = overdue. Remove an entry once its result has been consumed.",
+      "items": {
+        "type": "object",
+        "required": ["id", "pid"],
+        "properties": {
+          "id": { "type": "string", "description": "Short name, used in the continuation text." },
+          "pid": { "type": "integer", "description": "Process id of the background job. Liveness is what separates 'still working' from 'died before finishing'." },
+          "started_at": { "type": "string", "description": "ISO 8601." },
+          "log": { "type": "string", "description": "Where the job writes, relative to the project or absolute. Read it to learn the verdict." },
+          "done_marker": { "type": "string", "description": "A line the job writes when it completes. Without it, a gone process can only be reported as 'finished' — no longer running, success unverified." },
+          "expect_by": { "type": "string", "description": "ISO 8601. Past this, a still-running job is reported as overdue. Never a stop: it is a fact for the agent, not a failure." }
+        }
+      }
     },
     "next_step_prompt_meta": {
       "type": ["object", "null"],

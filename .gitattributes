@@ -1,25 +1,30 @@
-# Нормализация концов строк — критично для кросс-платформенности (находка P0-003).
-# bash-скрипты и Node.js ДОЛЖНЫ храниться с LF: иначе при checkout на Windows с
-# core.autocrlf=true они получают CRLF, и на Linux/macOS shebang ломается
-# (`#!/usr/bin/env bash\r` → `bash: bad interpreter: No such file or directory`).
+# Line-ending normalisation — critical for cross-platform work (finding P0-003).
+# Bash scripts and Node.js MUST be stored with LF: otherwise a checkout on Windows with
+# core.autocrlf=true gives them CRLF, and on Linux/macOS the shebang breaks
+# (`#!/usr/bin/env bash\r` -> `bash: bad interpreter: No such file or directory`).
+#
+# This file is published verbatim, so it is written in English like everything else in the public
+# tree. Until v1.19.0 it was in Russian and the export language gate never looked at it: the gate
+# selected files by extension, and a name with no extension matched nothing. The gate now decides
+# by content.
 
 * text=auto eol=lf
 
-# Скрипты и данные — всегда LF
+# Scripts and data — always LF
 *.sh        text eol=lf
 *.mjs       text eol=lf
 *.js        text eol=lf
 *.json      text eol=lf
 *.md        text eol=lf
-# Stop-хук без расширения — явное правило
+# The Stop hook has no extension — an explicit rule
 ralph-loop-stop text eol=lf
 
-# Windows-специфичные обёртки — CRLF
+# Windows-specific wrappers — CRLF
 *.cmd       text eol=crlf
 *.ps1       text eol=crlf
 *.bat       text eol=crlf
 
-# Бинарные файлы — без нормализации
+# Binary files — no normalisation
 *.png       binary
 *.jpg       binary
 *.jpeg      binary

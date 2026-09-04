@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  head, segmentReason, destructiveReason, destructiveVerdict, confirmationOf,
+  head, segmentReason, destructiveReason, destructiveVerdict, confirmationOf, HARD,
 } from '../../core/safety.mjs';
 
 // v1.2.1 — protection reduced to a minimum. Only rules where the consequence is unrecoverable AND
@@ -224,5 +224,99 @@ test('a confirmation marker does not mask the danger', () => {
   for (const cmd of ['rm -rf /', 'git push --force origin main']) {
     assert.ok(destructiveReason(`${cmd} # safety-guard: confirmed a good reason here`),
       `${cmd}: the danger must still be seen`);
+  }
+});
+
+// v1.13.0. Blocking the turn to wait is the defect this release exists for: `sleep` appeared 447
+// times in one real session, in thirty-nine `until … do sleep N; done` loops, with pauses up to 900
+// seconds inside a single tool call. It is advisory rather than forbidden on purpose — a short sleep
+// is sometimes the honest thing, and refusing it would cost a turn, which is the very waste being
+// fixed.
+test('advisory: a shell loop that waits blocks the turn', () => {
+  const cmds = [
+    'until grep -q DONE log.txt; do sleep 15; done',
+    'while ! test -f ready; do sleep 10; done',
+    'sleep 900',
+  ];
+  for (const c of cmds) {
+    assert.equal(destructiveReason(c), null, `${c} must stay allowed by default`);
+    const v = destructiveVerdict(c, { advisory: true });
+    assert.ok(v, `${c} must be noticed when advisory rules are on`);
+    assert.equal(v.level, 'advisory');
+    assert.match(v.reason, /turn/i, 'and the reason explains what it costs');
+  }
+});
+
+// A short pause is not the problem, and treating it as one would make the rule noise.
+test('advisory: a brief sleep is not worth a word', () => {
+  for (const c of ['sleep 2', 'sleep 30', 'npm test && sleep 5']) {
+    assert.equal(destructiveVerdict(c, { advisory: true }), null, `${c} is fine`);
+  }
+});
+
+// --- v1.18.1: the hole this rule had in the one shell the loop actually runs in ----------------
+//
+// PAID FOR IN SOMEBODY ELSE'S WORK. The rule above exists because killing Claude by image name
+// takes down every session on the machine including the loop's own. It was written for the
+// canonical `taskkill /IM claude.exe` — and on 2026-09-01 an agent in this very project ran
+//
+//     taskkill //FI "IMAGENAME eq claude.exe" //F
+//
+// which the guard ALLOWED, and a Claude Code session belonging to an unrelated project died mid
+// tool call. Two things about that form are not exotic: the doubled slash is what MSYS/git-bash
+// requires on Windows so the shell does not mangle the flag into a path, and `/FI IMAGENAME eq`
+// is the documented filter syntax. Both are ordinary; the rule simply matched one spelling of the
+// thing it forbids.
+//
+// The root is stated so the next reader does not narrow it again: what is dangerous is SELECTING
+// PROCESSES BY NAME. Which flag spells the selection is an accident of the command line.
+test('killing Claude or node by name is refused however the selection is spelled', () => {
+  const forms = [
+    'taskkill /IM claude.exe /F',
+    'taskkill //IM claude.exe //F',                       // git-bash doubles the slash
+    'taskkill //FI "IMAGENAME eq claude.exe" //F',        // the exact command that did the damage
+    'taskkill /FI "IMAGENAME eq node.exe" /F',
+    "taskkill /fi 'imagename eq Claude.exe' /f",          // flags and names are case-insensitive
+    'taskkill /F /FI "IMAGENAME EQ CLAUDE.EXE" /T',
+    'Stop-Process -Name claude -Force',
+    'Stop-Process -Name node',
+    'pkill -f claude',
+    'killall node',
+  ];
+  for (const cmd of forms) {
+    const v = destructiveVerdict(cmd);
+    assert.equal(v.level, HARD, `must be refused outright: ${cmd}`);
+    assert.match(v.reason, /every session|EVERY session/i,
+      'and the reason must name the consequence, not just the rule');
+  }
+});
+
+// The other half of the same rule, and the reason it must stay narrow: killing ONE process by its
+// id is the legitimate way to stop something, and refusing it would cost the loop a turn every
+// time it cleaned up after itself.
+test('killing one named process by its id stays allowed, in every spelling', () => {
+  for (const cmd of [
+    'taskkill /F /PID 1234',
+    'taskkill //F //PID 1234',
+    'taskkill /T /F /PID 4242',
+    'Stop-Process -Id 1234',
+    'kill 4321',
+    'kill -9 4321',
+  ]) {
+    const v = destructiveVerdict(cmd);   // null means nothing matched at all, which is allowed
+    assert.ok(!v || v.level !== HARD, `must stay allowed: ${cmd}`);
+  }
+});
+
+// A command that merely mentions the rule is text, not an act. Refusing these would make the guard
+// a nuisance in exactly the work that fixes it — this file's own tests contain the strings.
+test('talking about the command is not performing it', () => {
+  for (const cmd of [
+    'echo "never run taskkill /IM claude.exe"',
+    'grep -rn "taskkill /FI" core/',
+    'git commit -m "guard now refuses taskkill //FI IMAGENAME eq claude.exe"',
+  ]) {
+    const v = destructiveVerdict(cmd);   // null means nothing matched at all, which is allowed
+    assert.ok(!v || v.level !== HARD, `must stay allowed: ${cmd}`);
   }
 });

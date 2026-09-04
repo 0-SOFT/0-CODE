@@ -114,7 +114,25 @@ echo "== 6. Stop hook: every gate =="
 mkdir -p "$T/proj/docs"
 # Run the hook capturing stdout (HOUT) and the EXIT CODE (HRC); stderr goes to a file (we do not
 # silence it, so a crashing hook is not disguised as empty output).
-hookrun(){ HOUT="$(echo "$2" | CLAUDE_PROJECT_DIR="$T/proj" bash "$FW/hooks/ralph-loop-stop" 2>"$T/hookerr")"; HRC=$?; }
+# Every real Stop payload carries the path of the session transcript, and since v1.14.0 that file is
+# what proves a session alive — so a harness that omitted it would be testing a shape Claude Code
+# never sends. One transcript per simulated session, touched at the moment that session speaks.
+hookrun(){
+  HSID="$(printf '%s' "$2" | sed -n 's/.*"session_id":"\([^"]*\)".*/\1/p')"
+  HTR="$T/tr-${HSID:-anon}.jsonl"; printf 'turn\n' >> "$HTR"
+  HPAYLOAD="$(printf '%s' "$2" | sed "s|}\$|,\"transcript_path\":\"$HTR\"}|")"
+  HOUT="$(echo "$HPAYLOAD" | CLAUDE_PROJECT_DIR="$T/proj" bash "$FW/hooks/ralph-loop-stop" 2>"$T/hookerr")"; HRC=$?
+}
+# Make a session look gone: its transcript and the lock heartbeat both stop moving. This is what
+# actually happens when a Claude Code window is closed.
+hookquiet(){
+  node -e "
+const fs=require('fs');const old=Date.now()-40*60*1000;
+const tr=process.argv[1], lp=process.argv[2];
+if(fs.existsSync(tr)) fs.utimesSync(tr, old/1000, old/1000);
+if(fs.existsSync(lp)){const l=JSON.parse(fs.readFileSync(lp,'utf8'));l.heartbeatAt=new Date(old).toISOString();fs.writeFileSync(lp,JSON.stringify(l,null,2));}
+" "$T/tr-$1.jsonl" "$T/proj/docs/.loop.lock"
+}
 isblock(){ [ "$HRC" = 0 ] && printf '%s' "$HOUT" | grep -q '"decision":"block"'; }
 isstop(){ [ "$HRC" = 0 ] && ! printf '%s' "$HOUT" | grep -q '"decision":"block"'; }
 state(){ cat > "$T/proj/docs/STATE.md"; }
@@ -217,8 +235,18 @@ session_count: 1
 next_step_prompt: "go"
 ---
 Y
+# v1.14.0: adoption means the previous owner is GONE, so the scenario has to say so — a session
+# whose transcript is still being written is not dead, it is busy, and taking its loop away was the
+# defect this version closed.
+hookquiet dead_session
 hookrun x '{"session_id":"fresh_session","stop_hook_active":false}'
-{ isblock && printf '%s' "$HOUT" | grep -q 'adopted'; } && ok "adoption: a new session continues the loop (v0.5.9)" || no "adoption is broken: [rc=$HRC $HOUT]"
+{ isblock && printf '%s' "$HOUT" | grep -q 'adopted'; } && ok "adoption: a new session continues the loop of a session that went quiet (v0.5.9)" || no "adoption is broken: [rc=$HRC $HOUT]"
+# v1.14.0: and the other half of the same rule — a session that is still alive keeps its loop, and
+# the second session in the same project ends normally instead of driving it. Until now the lock
+# recorded the hook's own process number, which is dead milliseconds later, so this never held.
+hookrun x '{"session_id":"second_window","stop_hook_active":false}'
+{ isstop && grep -q 'not driving the loop' "$T/hookerr"; } && ok "one owner: a second session in the same project does not drive the loop (v1.14.0)" || no "a second session still hijacks the loop [rc=$HRC]"
+{ hookrun x '{"session_id":"fresh_session","stop_hook_active":false}'; isblock; } && ok "one owner: the owning session keeps driving across turns (v1.14.0)" || no "the owner lost its own loop [rc=$HRC]"
 # 6h. after adoption, last_session_id is rewritten to the new session
 grep -q 'last_session_id: fresh_session' "$T/proj/docs/STATE.md" && ok "adoption recorded the new session_id (v0.5.9)" || no "adoption did not record the session_id"
 
@@ -457,7 +485,7 @@ rmSync(d, { recursive: true, force: true });
 process.exit(A.every(Boolean) ? 0 : 1);
 " "$FW/core/loop-lock.mjs" 2>/dev/null && ok "lock: refuse a live owner, take over a dead one, release our own" || no "the loop lock is broken"
 # 11b. both loop drivers use the lock
-grep -q "acquireLock" "$FW/core/supervisor.mjs" && grep -q "readLock" "$FW/hooks/ralph-loop-stop.mjs"   && ok "the lock is wired into both drivers (supervisor and Stop hook)" || no "the lock is not wired everywhere"
+grep -q "acquireLock" "$FW/core/supervisor.mjs" && grep -q "acquireLock" "$FW/hooks/ralph-loop-stop.mjs"   && ok "the lock is wired into both drivers (supervisor and Stop hook)" || no "the lock is not wired everywhere"
 
 echo "== 12. Engine self-check (v1.5.0) =="
 node --input-type=module -e "
@@ -537,5 +565,34 @@ else
   skip "ignore policy index check (not a git work tree)"
 fi
 
+echo "== 15. Acceptance criteria of released versions (v1.18.0) =="
+# WHY THIS EXISTS. The roadmap review shipped in v1.16.0 fired for the first time and found 46 open
+# acceptance criteria across versions this project declares RELEASED — 2 saying out loud that they
+# were not met, and 44 saying nothing at all. From the roadmap alone a version that fell short of
+# its own bar looks exactly like one where somebody forgot a tick.
+#
+# The price was demonstrated the same day: v0.9.0 had carried "the >=80 % threshold for lines AND
+# branches is met" as an open criterion since release, and the first real audit run rediscovered
+# exactly that four versions later. The roadmap knew. Nobody read it.
+#
+# Where the check lives was chosen in the open (docs/decisions/1.18.0_criteria-guard.md): here,
+# rather than as a barrier in lib/update-state.mjs, because the barrier would have coupled the
+# state tool to the format of a document it has no other reason to know — 18 against 28 by score.
+SILENT="$(node --input-type=module -e "
+import { pathToFileURL } from 'node:url';
+const m = await import(pathToFileURL(process.argv[1]).href);
+const s = m.silentCriteria(m.readRoadmap(process.argv[2]));
+process.stdout.write(s.length ? m.summariseSilent(s) : 'CLEAN');
+" "$FW/core/acceptance.mjs" "$FW/docs/ROADMAP.md" 2>"$T/acceptance.err")"
+if [ "$SILENT" = "CLEAN" ]; then
+  ok "every open criterion of a released version says why it was not met"
+elif [ -z "$SILENT" ]; then
+  # Absence of output is NOT cleanliness: it means the check itself did not run. The first version of
+  # this guard imported a Windows path as a bare specifier, the error went to /dev/null, and an empty
+  # result read as "nothing silent" — a guard against unfalsifiable checks that was itself one.
+  no "the acceptance check did not run at all: $(head -c 200 "$T/acceptance.err" 2>/dev/null)"
+else
+  no "silent acceptance criteria: $SILENT"
+fi
 echo "== TOTAL: PASS=$PASS, FAIL=$FAIL, SKIPPED=$SKIPPED =="
 [ "$FAIL" -eq 0 ] && { echo "OK 0 failed — every smoke check passed"; exit 0; } || { echo "FAIL some checks did not pass"; exit 1; }

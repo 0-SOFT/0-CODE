@@ -18,10 +18,13 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parseYaml } from '../lib/yaml-mini.mjs';
 import { decideContinuation } from '../core/gates.mjs';
-import { acquireLock, refreshLock, ownerState, readLock } from '../core/loop-lock.mjs';
+import { acquireLock } from '../core/loop-lock.mjs';
+import { inspectStateJobs } from '../core/long-jobs.mjs';
 import { captureSnapshot } from '../core/progress.mjs';
 import { escalationDirective } from '../core/progress.mjs';
-import { readMemory, writeMemory, stagnantAfterTurn } from '../core/turn-progress.mjs';
+import {
+  readMemory, writeMemory, stagnantAfterTurn, ESCALATE_AFTER, BLOCK_AFTER, noProgressBlocker,
+} from '../core/turn-progress.mjs';
 import { noticeAfterTurn } from '../core/secret-notice.mjs';
 
 const HOOK_DIR = dirname(fileURLToPath(import.meta.url));
@@ -76,30 +79,61 @@ function notify(subject, body) {
   }
 }
 
-// --- The loop lock (v1.5.0) ---
+// --- The loop lock (v1.5.0; liveness evidence v1.14.0) ---
 // Why it is needed here: a single project can have two Claude Code sessions open, and both would
 // drive the loop, competing over docs/STATE.md. The hook is the second loop driver, so the check
 // belongs here too. The difference from the supervisor: the hook does NOT refuse to let the
 // session work, it merely stops that session from DRIVING THE LOOP — the session ends normally
 // (fail-open) and the loop stays with its live owner.
-const lock = readLock(PROJECT_DIR);
-const ownerStatus = ownerState(lock);
-if (ownerStatus === 'alive' || ownerStatus === 'foreign-unknown') {
-  const isOurs = lock && String(lock.sessionId || '') === String(SESSION_ID);
-  if (!isOurs) {
-    process.stderr.write(
-      `ralph-loop-stop: the loop is driven by another process (${lock.pid}, ${lock.engine || 'unknown engine'}) — this session is ending\n`);
-    failOpen();
-  }
-  refreshLock({ projectDir: PROJECT_DIR, pid: lock.pid });
-} else {
-  // The lock is free, its owner is dead, or the heartbeat went stale — take the loop over.
-  const taken = acquireLock({ projectDir: PROJECT_DIR, engine: 'stop-hook', sessionId: SESSION_ID });
-  if (taken.takenOver) process.stderr.write(`ralph-loop-stop: ${taken.reason}\n`);
+//
+// v1.14.0 — WHY IT NEVER WORKED UNTIL NOW. The hook used to take the lock without saying what
+// proved it alive, so the lock recorded THIS process's number — and a hook process lives for
+// milliseconds. Measured on a lock written a moment before: `ownerState -> dead`. The branch below
+// that compares session ids was therefore unreachable, and every extra session took the loop away
+// from the previous one on every turn.
+//
+// What actually lives as long as this session is its TRANSCRIPT: the file Claude Code appends to
+// with every message, whose path arrives in this very payload. So that is what we register. If the
+// payload carries no path (an older Claude Code, a hand-made invocation) we fall back to the
+// heartbeat under this session's id — degraded, but the loop still gets driven, which matters more
+// than perfect evidence.
+const TRANSCRIPT = hook.transcript_path ? String(hook.transcript_path) : '';
+const LIVENESS = TRANSCRIPT
+  ? { kind: 'file', id: TRANSCRIPT }
+  : { kind: 'heartbeat', id: SESSION_ID || `pid-${process.pid}` };
+
+// acquireLock now recognises a lock that is already ours and simply refreshes it, so one call
+// covers all three cases: free, ours, somebody else's.
+const claimed = acquireLock({
+  projectDir: PROJECT_DIR, engine: 'stop-hook', sessionId: SESSION_ID, liveness: LIVENESS,
+});
+if (!claimed.acquired) {
+  process.stderr.write(
+    `ralph-loop-stop: ${claimed.reason} This session is not driving the loop and ends normally.\n`);
+  failOpen();
 }
+if (claimed.takenOver) process.stderr.write(`ralph-loop-stop: ${claimed.reason}\n`);
 
 // --- The loop decision (gate logic lives in core/gates.mjs, shared by both drivers) ---
-const decision = decideContinuation(st, { sessionId: SESSION_ID, driver: 'stop-hook' });
+// v1.13.0: what long jobs are doing, gathered before the decision. A few system calls, never a wait.
+const jobs = inspectStateJobs(st, { cwd: PROJECT_DIR });
+
+const decision = decideContinuation(st,
+  { sessionId: SESSION_ID, driver: 'stop-hook', jobs, projectDir: PROJECT_DIR });
+
+// A job that died is the case a marker-only wait hangs on for ever, so it is said out loud as well
+// as written into the continuation text.
+for (const j of jobs) {
+  if (j.state === 'died' || j.state === 'overdue') {
+    process.stderr.write(`ralph-loop-stop: job ${j.id} is ${j.state} — ${j.why}\n`);
+  }
+  // v1.14.0: a record that contradicts itself — an unreadable deadline, a marker with nowhere to
+  // look for it — used to be ignored in silence, which is how a guard stops guarding without
+  // anybody noticing.
+  for (const w of (j.warnings || [])) {
+    process.stderr.write(`ralph-loop-stop: job ${j.id} — ${w}\n`);
+  }
+}
 
 // v1.7.0: dropping a stale step instruction in silence would swap one quiet failure for another,
 // so the reason it was dropped is said out loud. The loop still continues — it just continues on
@@ -161,13 +195,10 @@ const patchObj = {
   last_session_id: decision.next.lastSessionId,
   session_count: decision.next.sessionCount,
 };
-if (stagnantTurns >= 3) {
-  patchObj.blockers = [{
-    type: 'no_progress',
-    detail: `${stagnantTurns} consecutive turns without measurable progress (git and STATE unchanged), escalation did not help`,
-    at: new Date().toISOString(),
-  }];
-}
+// v1.15.0: the thresholds and the blocker itself live in core/turn-progress.mjs. They used to be
+// the bare numbers 2 and 3, written out in this file AND in the supervisor — one rule in two
+// places, which is the drift class v1.7.1 spent a version closing.
+if (stagnantTurns >= BLOCK_AFTER) patchObj.blockers = [noProgressBlocker(stagnantTurns)];
 const patch = JSON.stringify(patchObj);
 const res = spawnSync(process.execPath, [join(LIB_DIR, 'update-state.mjs'), STATE_FILE],
   { input: patch, encoding: 'utf8' });
@@ -188,7 +219,7 @@ catch { /* losing one observation is cheaper than losing the turn */ }
 
 // Three empty turns in a row: the blocker is already written above, so the loop stops here the same
 // way it stops for any other blocker. Escalation was tried and did not help.
-if (stagnantTurns >= 3) {
+if (stagnantTurns >= BLOCK_AFTER) {
   process.stderr.write(`ralph-loop-stop: ${stagnantTurns} turns without measurable progress — no_progress blocker recorded\n`);
   notify('Ralph Loop: no progress',
     `${stagnantTurns} consecutive turns without progress — a no_progress blocker was written to STATE. See docs/failure-modes.md.`);
@@ -198,7 +229,9 @@ if (stagnantTurns >= 3) {
 // Two empty turns: tell the agent, in the instruction it is about to act on, that its last turns
 // changed nothing. This is the case the loop exists for — an agent that believes it is waiting for
 // something is unable to notice that nothing is coming.
-const reason = stagnantTurns >= 2 ? escalationDirective(decision.reason, stagnantTurns) : decision.reason;
+const reason = stagnantTurns >= ESCALATE_AFTER
+  ? escalationDirective(decision.reason, stagnantTurns)
+  : decision.reason;
 
 // Emit decision:block so that Claude continues.
 process.stdout.write(JSON.stringify({

@@ -1,6 +1,6 @@
 # GUIDELINE — how this works, and why it works this way
 
-> **Framework version:** v1.12.0.
+> **Framework version:** v1.19.0.
 >
 > This file is for the person who opened the repository and wants to understand **why everything
 > is shaped the way it is**. If you only want to use the framework, read [README.md](README.md).
@@ -271,9 +271,31 @@ to commit a key deliberately is preserved, and the framework's job is to inform,
 
 Four mechanisms exist purely because unattended operation exposes what short runs never do.
 
-**The lock.** Two supervisors were once started against the same state file and competed for
+**The lock, and what proves an owner alive.** Two supervisors were once started against the same state file and competed for
 writes. A live owner now refuses the second launch; a dead one is taken over, because a crashed
 process must not block autonomy forever.
+
+What counts as "live" is the part that took a version to get right. The lock used to record a
+process number, which is exact for the supervisor and meaningless for the Stop hook — a hook is a
+program that lives for milliseconds at the end of a turn, so its own number is dead by the time
+anyone checks, and every extra Claude Code session took the loop from the previous one. Evidence is
+now an explicit part of the lock and each kind answers in the way its own physics allows: a process
+is put to the kernel, a file tops the heartbeat up with its modification time, a heartbeat speaks
+alone when there is nothing external to ask. The hook registers the session transcript, because that
+file lives exactly as long as the session does. Opening a second session in a project is therefore
+safe: it is told who holds the loop and how to take it deliberately, and it behaves like an ordinary
+session.
+
+**Long-running work.** A test run, a build, a subagent — anything the loop must wait for. Waiting
+used to be invisible: a turn spent polling and a turn that had hung looked identical from outside,
+and in one real session the shell was used as a scheduler 447 times. Start the work in the
+background, record it under `running_jobs`, and **end the turn**; every continuation then reports
+where each job stands.
+
+The part worth remembering is why a completion marker is not enough. Its absence means two different
+things — still working, or died before writing it — and only liveness separates them. A job that is
+gone without its marker is reported as **dead**, which is the case a `until grep -q MARKER` wait
+hangs on for ever.
 
 **Retries.** A single `UnknownError` from a provider used to end a run. Transient failures are
 retried with growing backoff; real errors stop immediately. The split is not a list of known
@@ -303,9 +325,13 @@ measurement.
 
 ## 9. Testing
 
-360 tests plus 129 smoke checks (119 of them from a fresh clone, where 10 declare themselves
-skipped), no test framework — the project is zero-dependency including its
-tooling.
+A unit and integration suite plus end-to-end smoke checks, with no test framework at all — the
+project is zero-dependency including its tooling. A fresh clone runs slightly fewer smoke checks
+and announces each one it skips, because a suite that quietly shrinks is lying about its own coverage.
+
+The current counts are at the top of [CHANGELOG.md](CHANGELOG.md), measured at each release. They
+are deliberately not repeated here: this document has carried a stale figure twice, and a number
+copied into prose has no way of noticing that it stopped being true.
 
 More interesting is what the tests are *for*. Over three versions, every serious defect was found
 by live checks while coverage sat above 80%, and **none** was caught by a test. The reason is
@@ -318,7 +344,74 @@ nowhere; a default chosen without justification; a version header drifting from 
 
 ---
 
-## 10. Extending it
+## 10. Keeping the work honest
+
+Four mechanisms with one thing in common: they exist because an agent's own account of its work is
+not evidence. Each was added after a measurement showed the account and the work disagreeing.
+
+### Decision records
+
+Measured across this project's history: 21 of 52 version prompts carried a brainstorm, and **11 of
+72 reports named a single rejected alternative**. Eighty-five per cent of the work shipped without
+one alternative ever named — not from laziness, but because the practice lived in a document rather
+than in a mechanism, so it switched on when instructed and off when not.
+
+A record under `docs/decisions/<version>_<name>.md` now has a shape a machine can check: at least
+three options — two is a fork, and the second is usually there to make the first look chosen — each
+with impact, confidence and cost, **and a basis**, which is either a measurement or an assumption
+named as one. A number without a basis is an opinion wearing a digit. Everything not chosen says why
+it lost, and the record says what would show the choice to be wrong.
+
+The score `(impact × confidence) / cost` is **computed on read and never stored**. A record carrying
+a written score is refused rather than tidied: a copy of numbers living three lines above it will one
+day disagree with them.
+
+The mechanism cannot know whether a given version needed a record, so it does the one thing that
+closes the silent case — whether a record exists for the version in flight is printed in the
+continuation header every turn. A flat decision can no longer look exactly like a considered one.
+
+### The roadmap reviews itself
+
+The measurement that prompted it: across twenty-five releases, the number of versions ever cancelled,
+dropped or reordered was **zero**. Either the plan was right every time, or nobody looked.
+
+Every so many turns the step instruction is *replaced* by a review of the remaining plan against what
+the work has since shown — replaced rather than appended, because a directive at the end of a long
+text leaves the agent doing what it was already doing. Recording the review without saying what came
+of it is refused on the way in: "all fine" is not an outcome, and a review that cannot fail is not a
+review.
+
+It makes the agent look. It cannot make it see — and that limit is written into the mechanism's own
+decision record as its falsifier.
+
+### Acceptance criteria that close with evidence
+
+Versions declaring themselves released carried **forty** open acceptance criteria saying nothing at
+all, so there was no way to tell a version that fell short of its own bar from one where somebody
+forgot a tick. The cost was measured the same day: a criterion open since v0.9.0 said the coverage
+threshold covered lines *and branches*; it never had, and the two files deciding whether the loop
+continues and whether a dangerous command runs sat at 12.5 % of branches.
+
+A criterion is now either closed with evidence, or says out loud that it was not met or has been
+withdrawn — and the marker is a **shape rather than a word** (a bold opening ending in a colon, then
+a substantial reason), because a target project's roadmap may be written in any language.
+
+### Audits become data
+
+`/productionaudit` runs the four audits once; `/productionauditloop` repeats until P0 + P1 + P2
+reach zero. That exit condition cannot rest on the agent's word: an agent able to declare the loop
+finished will finish it by declaring, and the declaration will be sincere.
+
+So findings live in a machine-readable ledger at the head of the same file the audit templates
+already produce. An audit that looked at nothing finds nothing, and zero then reads exactly like a
+clean pass — so coverage is required of every ledger and not only of the clean ones, marking a
+finding fixed requires evidence, and a dimension with no ledger is not a clean dimension but one that
+never ran.
+
+---
+
+
+## 11. Extending it
 
 **A new engine.** Implement `core/backends/Backend.mjs`, register it in the factory, add a model
 preset. Do not touch the gates — if you find yourself changing loop logic for one engine, the

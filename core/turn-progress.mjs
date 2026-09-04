@@ -31,6 +31,27 @@ import { assessProgress } from './progress.mjs';
 
 export const MEMORY_FILENAME = '.loop-progress';
 
+// v1.15.0 — WHERE THE THRESHOLDS LIVE, and why they moved here. Until now "two empty turns escalate,
+// three record a blocker" was written as the bare numbers 2 and 3 inside BOTH drivers. One rule
+// spelled out in two files is the drift class v1.7.1 spent a version closing; changing the policy
+// meant remembering to change it twice, and nothing would have complained if only one changed.
+//
+// Why these two numbers. One empty turn is normal — an agent may spend a turn reading. Two in a row
+// is worth saying something about, because the cheapest possible answer (tell the agent) might fix
+// it. Three means the cheapest answer was tried and did not work, so continuing costs money to
+// produce nothing.
+export const ESCALATE_AFTER = 2;
+export const BLOCK_AFTER = 3;
+
+// The blocker both drivers record, so that its type and wording cannot drift apart either.
+export function noProgressBlocker(stagnantTurns, at = new Date().toISOString()) {
+  return {
+    type: 'no_progress',
+    detail: `${stagnantTurns} consecutive turns without measurable progress (git and STATE unchanged), escalation did not help`,
+    at,
+  };
+}
+
 export function memoryPath(docsDir) {
   return join(docsDir, MEMORY_FILENAME);
 }

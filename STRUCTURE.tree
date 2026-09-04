@@ -24,12 +24,23 @@
 │   │                                       # a thin adapter; nothing here knows which CLI it is talking to.
 │   │
 │   ├── gates.mjs                           # Should the loop continue? Four stop conditions: a blocker,
-│   ├── loop-limits.mjs                     # The outer backstop (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP)
-│   │                                       # and the rule that it sits above the loop's own cap.
 │   │                                       # released == current, the iteration cap, the budget cap.
 │   │                                       # Plus one signal that only ever warns: silence, when STATE
 │   │                                       # has stood untouched past stall_timeout_minutes.
 │   │                                       # A pure function — both loop drivers share it.
+│   ├── loop-limits.mjs                     # The outer backstop (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP)
+│   │                                       # and the rule that it sits above the loop's own cap.
+│   ├── long-jobs.mjs                       # Long external work the loop understands: running, finished,
+│   │                                       # died, overdue. A marker alone cannot tell "still working"
+│   │                                       # from "died before writing it" — liveness separates them.
+│   ├── decision-record.mjs                 # A decision with at least three options, each scored and
+│   │                                       # grounded. The score is computed on read, never stored.
+│   ├── roadmap-review.mjs                  # Every so many turns the step instruction is replaced by a
+│   │                                       # review of the remaining plan against what the work showed.
+│   ├── audit-ledger.mjs                    # Audit findings as data, so "P0-P2 are zero" is a count
+│   │                                       # rather than the agent's word for it.
+│   ├── acceptance.mjs                      # A released version's criteria: closed with evidence, or
+│   │                                       # saying out loud that they were not met.
 │   ├── supervisor.mjs                      # The external loop driver (used by OpenCode; optional for Claude).
 │   │                                       # Lock, self-check, turn, retries, progress, state update.
 │   ├── loop-lock.mjs                       # One loop per project. A live owner refuses a second launch;
@@ -105,13 +116,17 @@
 ├── docs/
 │   ├── PROVEN.md                           # What was verified by experiment, with numbers and limits.
 │   ├── failure-modes.md                    # What breaks, how it looks, what to do. All observed, not imagined.
+│   ├── two-modes.md                        # The two ways to drive the loop side by side: the Stop hook
+│   │                                       # and the supervisor. What each can and cannot do, and what
+│   │                                       # must never be run at once.
 │   └── schemas/                            # JSON Schema for STATE.md and the capability catalogue.
 │
 ├── skills/orchestrator-wrapper/SKILL.md    # The contract the agent follows on every iteration:
 │                                           # read state → pick the stage → do one step → update state.
 │
-└── tests/                                  # 360 tests plus 129 smoke checks. No test framework — the project
-    │                                       # is zero-dependency including its tooling.
+└── tests/                                  # Unit, integration and end-to-end, with no test framework — the
+    │                                       # project is zero-dependency including its tooling. Counts are
+    │                                       # at the top of CHANGELOG.md, measured at each release.
     ├── run.mjs                             # Runner over node --test with a coverage gate.
     ├── coverage-report.mjs                 # Reads Node's coverage table. Apart from run.mjs so it can be
     │                                       # examined without running the suite it measures.

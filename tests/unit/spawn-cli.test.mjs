@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runCli, quoteWin } from '../../core/backends/spawn-cli.mjs';
+import {
+  runCli, quoteWin, processIdentity, stillOurs, sweepStaleChildren,
+} from '../../core/backends/spawn-cli.mjs';
 
 test('quoteWin: quotes only for spaces and metacharacters', () => {
   assert.equal(quoteWin('simple'), 'simple');
@@ -185,4 +187,72 @@ test('the total cap remains a far backstop', async () => {
     ['-e', 'const t=setInterval(()=>process.stdout.write("."),100)'],   // talks without stopping
     { idleTimeoutMs: 5000, timeoutMs: 900 });
   assert.equal(r.timedOut, true, 'endless chatter must eventually hit the total cap');
+});
+
+// --- v1.15.0: a cleanup must never be able to destroy somebody else's work --------------------
+//
+// WHAT HAPPENED. A live supervisor run was started from the framework directory. Its engine probe
+// force-killed a process tree, and a Claude Code session belonging to an UNRELATED project ended in
+// the same minute, cut off mid tool call. The framework's own header says killing by NAME was
+// rejected because it "would also take down the user's unrelated processes" — and then the registry
+// that replaced it reached the same outcome by another route.
+//
+// THE MECHANISM. `sweepStaleChildren` read process numbers out of a file written by an EARLIER run
+// and handed each one to `taskkill /T /F`, with no check that the number still belonged to us. A
+// process number is not a name: the system issues it again once the process is gone, and a file
+// written minutes or hours ago is exactly old enough for that to have happened.
+
+test('a recorded number that now belongs to somebody else is not killed', async () => {
+  const { spawn } = await import('node:child_process');
+  const bystander = spawn(process.execPath, ['-e', 'setTimeout(()=>{},30000)'], { stdio: 'ignore' });
+  try {
+    await new Promise(r => setTimeout(r, 300));
+    const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+    assert.ok(alive(bystander.pid), 'the probe must actually have a process to protect');
+
+    // We hold a record of this number from a previous run, but the process behind it is not ours.
+    const killed = killTree(bystander.pid, { identity: 'a process that started at some other time' });
+    assert.equal(killed, false, 'an unverified number must be refused, not force-killed');
+    await new Promise(r => setTimeout(r, 200));
+    assert.ok(alive(bystander.pid), "somebody else's process must still be running");
+  } finally { try { bystander.kill('SIGKILL'); } catch { /* already gone */ } }
+});
+
+test('an identity is what the process is, not what we hope it is', async () => {
+  const { spawn } = await import('node:child_process');
+  const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{},30000)'], { stdio: 'ignore' });
+  try {
+    await new Promise(r => setTimeout(r, 300));
+    const id = processIdentity(child.pid);
+    // On a system that will not answer, identity is null — and by the rule above that means "do not
+    // kill", which is the safe error. Where it does answer, it must be stable and it must match.
+    if (id) {
+      assert.equal(processIdentity(child.pid), id, 'the same process must give the same answer twice');
+      assert.equal(stillOurs(child.pid, id), true);
+      assert.equal(stillOurs(child.pid, `${id}-different`), false);
+    }
+    assert.equal(stillOurs(999999, 'anything'), false, 'a process that is gone is never ours');
+    assert.equal(stillOurs(child.pid, null), false, 'no identity means no permission to kill');
+  } finally { try { child.kill('SIGKILL'); } catch { /* already gone */ } }
+});
+
+test('a registry from before v1.15.0 carries no identities, so it kills nothing', async () => {
+  const { mkdtempSync, writeFileSync: write, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { spawn } = await import('node:child_process');
+  const dir = mkdtempSync(join(tmpdir(), 'sweep-'));
+  const bystander = spawn(process.execPath, ['-e', 'setTimeout(()=>{},30000)'], { stdio: 'ignore' });
+  try {
+    await new Promise(r => setTimeout(r, 300));
+    const file = join(dir, '.loop-children');
+    write(file, JSON.stringify({ pids: [bystander.pid], at: new Date().toISOString() }), 'utf8');
+    const killed = sweepStaleChildren(file);
+    assert.equal(killed, 0, 'one leaked orphan is cheaper than one destroyed stranger');
+    const alive = (() => { try { process.kill(bystander.pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } })();
+    assert.ok(alive, 'the bystander must survive a sweep it cannot be proved to belong to');
+  } finally {
+    try { bystander.kill('SIGKILL'); } catch { /* already gone */ }
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

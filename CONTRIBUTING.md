@@ -21,8 +21,8 @@ you change documentation, check that the code still does what the new sentence s
 ## Before you open a pull request
 
 ```bash
-node tests/run.mjs --coverage-min=80    # 360 tests plus the coverage gate
-bash tests/smoke.sh                     # 119 end-to-end checks, plus 10 skipped aloud
+node tests/run.mjs --coverage-min=80    # the whole suite, plus the coverage gate
+bash tests/smoke.sh                     # end-to-end checks; a fresh clone announces the ones it skips
 ```
 
 The six skipped checks are expected: they need artefacts that exist only in a maintainer's working

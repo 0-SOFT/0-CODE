@@ -255,3 +255,32 @@ test('an exceeded spending cap still stops the loop', () => {
   assert.equal(d.action, 'stop');
   assert.equal(d.stopCause, 'budget_cap');
 });
+
+// --- v1.13.0: long jobs appear in the machine truth -------------------------------------------
+//
+// The question a human asked four different ways in one session — "are we waiting for something, or
+// just standing still?" — had no answer anywhere in the loop's output. It does now, in the block
+// that already carries the version, the stage and the blockers.
+test('long jobs are reported in the continuation, so waiting is distinguishable from standing still', () => {
+  const d = decideContinuation(
+    { current_version: '1', iteration: 3, blockers: [] },
+    { sessionId: 'x', driver: 'stop-hook', jobs: [
+      { id: 'suite', state: 'running' }, { id: 'build', state: 'overdue' }] });
+  assert.match(d.reason, /jobs:/i, 'the header names the job situation');
+  assert.match(d.reason, /running: 1/i);
+  assert.match(d.reason, /overdue: 1/i);
+  assert.match(d.reason, /suite/, 'and the job itself is named');
+});
+
+// A job that died is the case a marker-only wait hangs on for ever. It must be impossible to miss.
+test('a died job is called out, not merely counted', () => {
+  const d = decideContinuation(
+    { current_version: '1', iteration: 3, blockers: [] },
+    { sessionId: 'x', driver: 'stop-hook', jobs: [{ id: 'suite', state: 'died' }] });
+  assert.match(d.reason, /died: 1/i);
+});
+
+test('no jobs → the header says nothing about them', () => {
+  const d = decideContinuation({ current_version: '1', iteration: 3, blockers: [] }, { sessionId: 'x' });
+  assert.ok(!/jobs:/i.test(d.reason), 'silence is correct when nothing was ever started');
+});

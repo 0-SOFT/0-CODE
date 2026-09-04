@@ -195,13 +195,20 @@ test('runLoop: a second launch is refused while the owner is alive', async () =>
     const { acquireLock } = await import('../../core/loop-lock.mjs');
     const { dirname } = await import('node:path');
     const projectDir = dirname(dirname(p.stateFile));
-    // another LIVE owner — we use the current process id, which is alive for certain
-    acquireLock({ projectDir, pid: process.pid, engine: 'supervisor' });
+    // Another LIVE owner, and genuinely another one. Using this process's own number would now read
+    // as "the loop is already ours" — identity comes from the evidence, and the evidence would
+    // match. So the owner here is a Claude Code session proved alive by a transcript we just wrote,
+    // which is exactly the shape of owner this supervisor has to yield to in the field.
+    acquireLock({
+      projectDir, pid: 4242, engine: 'stop-hook', sessionId: 'a-live-claude-session',
+      liveness: { kind: 'file', id: p.stateFile },     // freshly written, so freshly alive
+    });
 
     const stub = stubBackend(() => ({ ok: true, output: 'x' }));
     const r = await runLoop({ stateFile: p.stateFile, backend: stub, maxLoops: 3, sessionId: 's', usePreflight: false });
     assert.equal(r.stopped, 'locked', 'the second launch must refuse');
-    assert.match(r.reason, /already running as process/);
+    assert.match(r.reason, /already driven by/);
+    assert.match(r.reason, /a-live-claude-session/, 'and it must name who holds the loop');
     assert.equal(stub.calls, 0, 'not a single turn may run — the state belongs to somebody else');
   } finally { p.cleanup(); }
 });
@@ -321,4 +328,153 @@ test('runLoop: --no-preflight skips the self-check (for debugging)', async () =>
     assert.equal(r.stopped, 'max_loops');
     assert.equal(stub2.calls, 2, 'without the self-check there are only working turns');
   } finally { p.cleanup(); }
+});
+
+// --- v1.15.0: the supervisor is made the equal of the Stop hook, not its understudy -------------
+
+// DEFECT 1 — one rule, two implementations. "Two empty turns escalate, three record a no_progress
+// blocker" lives on disk for the Stop hook (core/turn-progress.mjs, survives a restart) and in a
+// local variable for the supervisor (reset by every launch). So a run that is restarted can never
+// reach three, and the blocker never arrives. This is the drift class v1.7.1 spent a version on.
+test('the count of empty turns survives a restart of the supervisor', async () => {
+  const p = mkTempProject({ current_version: '1', iteration: 0, next_step_prompt: 'go' });
+  try {
+    const idle = () => stubBackend(() => ({ ok: true, output: 'nothing happened' }));
+    // Two launches of one turn each: exactly the shape of a run interrupted and resumed.
+    await runLoop({ stateFile: p.stateFile, backend: idle(), maxLoops: 1, sessionId: 's', usePreflight: false });
+    await runLoop({ stateFile: p.stateFile, backend: idle(), maxLoops: 1, sessionId: 's', usePreflight: false });
+    const r = await runLoop({ stateFile: p.stateFile, backend: idle(), maxLoops: 1, sessionId: 's', usePreflight: false });
+    assert.equal(r.stopped, 'no_progress',
+      'three empty turns are three empty turns, whether or not the process was restarted between them');
+    assert.ok((readFrontmatter(p.stateFile).blockers || []).some(b => b.type === 'no_progress'));
+  } finally { p.cleanup(); }
+});
+
+// DEFECT 3 — the engine self-check ran BEFORE the state was even read, so starting the supervisor on
+// a finished version spent a paid engine call in order to then say "the loop is over".
+test('a stop gate is reached without spending a single engine call on a self-check', async () => {
+  const p = mkTempProject({ current_version: '1', released_version: '1', next_step_prompt: 'go' });
+  try {
+    const stub = stubBackend(() => ({ ok: true, output: 'x' }));
+    const r = await runLoop({ stateFile: p.stateFile, backend: stub, maxLoops: 5, sessionId: 's' });
+    assert.equal(r.stopped, 'released');
+    assert.equal(stub.calls, 0, 'nothing may be paid for before we know there is work to do');
+  } finally { p.cleanup(); }
+});
+
+// DEFECT 4 — the lock was refreshed only BETWEEN turns, and the deadline was chosen from a number
+// that turned out not to be the number. core/loop-lock.mjs claimed "an agent turn is capped at
+// 15 minutes (OPENCODE_TURN_TIMEOUT_MS), so 30 minutes gives a twofold margin". The constant is
+// 4 HOURS. Measured: the turn cap is eight times the lock deadline, not half of it — so an
+// ordinary long turn could have its lock taken from underneath a working process, which is exactly
+// the state corruption the lock exists to prevent.
+test('the lock keeps beating while a turn is still running', async () => {
+  const p = mkTempProject({ current_version: '1', iteration: 0, next_step_prompt: 'go' });
+  try {
+    const { readLock } = await import('../../core/loop-lock.mjs');
+    const { dirname } = await import('node:path');
+    const projectDir = dirname(dirname(p.stateFile));
+    // Both readings are taken INSIDE the turn, so the only thing that can move the heartbeat
+    // between them is a beat of its own. Comparing against a moment before runLoop would have
+    // passed on the old code too — acquireLock stamps the lock on the way in — and a test that
+    // cannot fail is not a test.
+    let atTurnStart = null, atTurnEnd = null;
+    const slow = stubBackend(async () => {
+      atTurnStart = readLock(projectDir).heartbeatAt;
+      await new Promise(r => setTimeout(r, 400));       // a turn that outlives the beat interval
+      atTurnEnd = readLock(projectDir).heartbeatAt;
+      return { ok: true, output: 'x' };
+    });
+    await runLoop({
+      stateFile: p.stateFile, backend: slow, maxLoops: 1, sessionId: 's', usePreflight: false,
+      heartbeatMs: 100,
+    });
+    assert.ok(atTurnStart && atTurnEnd, 'the lock must exist for the whole turn');
+    assert.ok(atTurnEnd > atTurnStart,
+      'a working turn must keep proving it is alive, or a long turn loses its own lock');
+  } finally { p.cleanup(); }
+});
+
+// DEFECT 5 — the `lock_lost` exits returned without going through finish(), and killAllChildren was
+// wired only to process exit. Used as a library — which is how the tests and any wrapper use it —
+// the engine processes of an abandoned loop simply kept running.
+test('no exit path leaves an engine process behind', async () => {
+  const p = mkTempProject({ current_version: '1', iteration: 0, next_step_prompt: 'go' });
+  try {
+    const { runCliAsync } = await import('../../core/backends/spawn-cli.mjs');
+    const { isPidAlive } = await import('../../core/loop-lock.mjs');
+    const { dirname } = await import('node:path');
+    const projectDir = dirname(dirname(p.stateFile));
+    let childPid = null;
+    const stub = stubBackend(async () => {
+      // A real long-lived engine process, launched the way the adapters launch one.
+      const running = runCliAsync(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], {});
+      await new Promise(r => setTimeout(r, 300));
+      const { readFileSync } = await import('node:fs');
+      const { join } = await import('node:path');
+      try {
+        childPid = JSON.parse(readFileSync(join(projectDir, 'docs', '.loop-children'), 'utf8')).pids[0];
+      } catch { childPid = null; }
+      // Somebody else takes the loop while our turn is in flight. The lock file is written
+      // directly, because since v1.14.0 acquireLock correctly REFUSES a live owner — which is the
+      // whole point of that version. What we are reproducing here is the on-disk result of a
+      // take-over that already happened, not the act of stealing a live lock.
+      const { writeFileSync: write } = await import('node:fs');
+      const { lockPath } = await import('../../core/loop-lock.mjs');
+      write(lockPath(projectDir), JSON.stringify({
+        pid: 4242, host: 'other-host', engine: 'other', sessionId: 'other',
+        liveness: { kind: 'heartbeat', id: 'other' },
+        startedAt: new Date().toISOString(), heartbeatAt: new Date().toISOString(),
+      }), 'utf8');
+      running.catch(() => {});
+      return { ok: true, output: 'x' };
+    });
+    const r = await runLoop({ stateFile: p.stateFile, backend: stub, maxLoops: 1, sessionId: 's', usePreflight: false });
+    assert.equal(r.stopped, 'lock_lost');
+    assert.ok(childPid, 'the probe must actually have started an engine process');
+    await new Promise(res => setTimeout(res, 500));
+    assert.equal(isPidAlive(childPid), false,
+      'an abandoned loop must not leave its engine running');
+  } finally { p.cleanup(); }
+});
+
+// DEFECT 2 — `--max` without a usable number produced NaN, and `loops >= NaN` is always false, so a
+// request for a LIMIT silently became the absence of one. Measured before the fix:
+//   maxLoops = NaN | loops >= maxLoops -> false -> no limit at all
+// Turning a request to be constrained into an unbounded run is the worst possible reading of it.
+test('an option that asks for a limit never silently becomes no limit', async () => {
+  const { parseArgs } = await import('../../core/supervisor.mjs');
+  for (const argv of [['--max'], ['--max', 'lots'], ['--max', '0'], ['--max', '-3']]) {
+    const r = parseArgs(argv);
+    assert.ok(r.error, `${JSON.stringify(argv)} must be refused, not quietly ignored`);
+    assert.match(r.error, /--max/);
+  }
+  assert.equal(parseArgs(['--max', '5']).maxLoops, 5, 'a real number still works');
+  for (const flag of ['--state', '--model', '--backend']) {
+    assert.ok(parseArgs([flag]).error, `${flag} with no value must be refused`);
+  }
+});
+
+// DEFECT 6 — WHERE THE ENGINE RUNS, found the hard way rather than by measurement. `cwd` defaulted
+// to `process.cwd()`, so a supervisor started from one directory with `--state` pointing at another
+// drove one project while running the engine inside a different one. In the incident that exposed
+// this, that meant a real Claude Code session started inside the framework repository, on an
+// instruction meant for another project, next to a session already working there.
+test("the engine runs in the project the state belongs to, not where the supervisor was called", async () => {
+  const p = mkTempProject({ current_version: '1', iteration: 0, next_step_prompt: 'go' });
+  try {
+    const { dirname } = await import('node:path');
+    const projectDir = dirname(dirname(p.stateFile));
+    let seen = null;
+    const stub = stubBackend((opts) => { seen = opts.cwd; return { ok: true, output: 'x' }; });
+    await runLoop({ stateFile: p.stateFile, backend: stub, maxLoops: 1, sessionId: 's', usePreflight: false });
+    assert.equal(seen, projectDir,
+      'the project is dirname(dirname(stateFile)), never the directory the process happens to be in');
+  } finally { p.cleanup(); }
+});
+
+test("an explicit --cwd still wins, for a state file kept outside its project", async () => {
+  const { parseArgs } = await import('../../core/supervisor.mjs');
+  assert.equal(parseArgs(['--cwd', '/somewhere']).cwd, '/somewhere');
+  assert.ok(parseArgs(['--cwd']).error, 'and a missing value is refused like every other option');
 });

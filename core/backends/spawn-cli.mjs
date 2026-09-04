@@ -41,10 +41,107 @@ export function quoteWin(a) {
 }
 
 // --- Tracking live children -----------------------------------------------------------------
+//
+// v1.15.0 — A PROCESS NUMBER IS NOT AN IDENTITY, and this module was betting a force-kill on it.
+//
+// The header above is explicit that killing by NAME was rejected because it "would also take down
+// the user's unrelated processes". The registry that replaced it could do the same thing by a
+// different route: the operating system hands a process number out again once the process is gone,
+// and `sweepStaleChildren` took every number out of a file written by an EARLIER run — minutes or
+// hours old, which is exactly when reuse has had time to happen — and passed each one to
+// `taskkill /T /F`. Nothing checked that the number still belonged to us. A stranger's whole
+// process tree could be destroyed by a routine cleanup.
+//
+// This is the same defect the loop lock was rewritten for in v1.14.0 ("liveness must be proved by
+// something that lives as long as the thing it represents"), and the same one `core/long-jobs.mjs`
+// closed for job status. Here the consequence is not a wrong status line: it is a killed process
+// somebody was using.
+//
+// THE FIX. A recorded child now carries an identity — the moment the process was created, which the
+// operating system will not repeat for a recycled number — and nothing is killed unless its identity
+// still matches. When an identity cannot be established at all, we DO NOT KILL: leaking one orphan
+// costs some memory, killing a stranger costs their work.
 
-const live = new Set();           // ids of processes launched by this module
+const live = new Map();           // pid → identity of the process we actually launched
 let cleanupInstalled = false;
 let registryFile = null;          // path to the on-disk registry (line of defence 2)
+
+// ASKING THE SYSTEM ONCE INSTEAD OF ONCE PER PROCESS, and why that is not premature optimisation.
+//
+// The first implementation asked `wmic` about one process number at a time. Measured on the machine
+// this was written on: 3569 ms for the first call, 2154 ms for the second. Registering a child and
+// later verifying it are two calls, so every engine turn paid five seconds for bookkeeping, and the
+// test suite — which starts many children in a row — stopped finishing at all.
+//
+// One snapshot of the whole process table costs the same as one lookup, so it is taken once and
+// reused for a couple of seconds. The window is deliberately short: it is far longer than a burst of
+// registrations and far shorter than the hours of staleness that make a recycled number dangerous.
+const TABLE_CACHE_MS = 2000;
+let processTableCache = { at: 0, table: null };
+
+function processTable({ fresh = false } = {}) {
+  const now = Date.now();
+  if (!fresh && processTableCache.table && (now - processTableCache.at) < TABLE_CACHE_MS) {
+    return processTableCache.table;
+  }
+  const table = new Map();
+  try {
+    const r = spawnSync('wmic', ['process', 'get', 'ProcessId,CreationDate', '/format:csv'],
+      { encoding: 'utf8', timeout: 20000 });
+    for (const line of String(r.stdout || '').split('\n')) {
+      // Node,CreationDate,ProcessId — the header and blank lines simply do not match.
+      const parts = line.trim().split(',');
+      if (parts.length < 3) continue;
+      const created = parts[parts.length - 2].trim();
+      const pid = Number(parts[parts.length - 1].trim());
+      if (Number.isInteger(pid) && pid > 0 && /^\d{14}/.test(created)) table.set(pid, created);
+    }
+  } catch { /* a system that will not answer leaves the table empty, which means "do not kill" */ }
+  processTableCache = { at: now, table };
+  return table;
+}
+
+// When a process was created, as a string. Null means "cannot be established" — a process that is
+// gone, or a system that will not tell us. Never throws: cleanup must not be able to crash a turn.
+//
+// A null on a system where `wmic` has been removed (Windows 11 24H2 and later) means the orphan
+// sweep stops killing anything. That is the safe direction and it is stated rather than discovered:
+// a leaked engine process costs memory until the next reboot, while a wrongly killed one cost
+// somebody a running session in v1.15.0.
+export function processIdentity(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    if (process.platform === 'win32') {
+      const cached = processTable().get(pid);
+      if (cached) return cached;
+      // A MISS MEANS TWO DIFFERENT THINGS, and only one of them is "gone". The other is that our
+      // snapshot was taken before this process started — which is exactly what happens at
+      // registration, a few milliseconds after a spawn. Caught by the test that kills a running
+      // child: the child was registered with a null identity from a stale snapshot, and a null
+      // identity means "never kill", so cleanup silently stopped working. Refusing to kill is the
+      // safe error only when the process really is not ours; here it was ours and we could not
+      // prove it. So a miss is always worth one fresh look.
+      return processTable({ fresh: true }).get(pid) || null;
+    }
+    // Linux: field 22 of /proc/<pid>/stat is the start time in clock ticks since boot. The comm
+    // field can contain spaces and brackets, so we cut everything up to the closing bracket first.
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const tail = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      return tail[19] || null;                       // field 22 overall, 20th after the comm field
+    } catch { /* not Linux, or no procfs — fall through */ }
+    const r = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 10000 });
+    const s = String(r.stdout || '').trim();
+    return s || null;
+  } catch { return null; }
+}
+
+// Is this still the process we recorded? Unknown counts as NO: refusing to kill is the safe error.
+export function stillOurs(pid, identity) {
+  if (!identity) return false;
+  const now = processIdentity(pid);
+  return Boolean(now) && now === identity;
+}
 
 // Where to write live child ids so the next launch can finish off orphans after the parent was
 // killed hard. The supervisor sets it once; without it only line 1 is active.
@@ -55,7 +152,12 @@ function writeRegistry() {
   try {
     mkdirSync(dirname(registryFile), { recursive: true });
     if (live.size === 0) { if (existsSync(registryFile)) unlinkSync(registryFile); return; }
-    writeFileSync(registryFile, JSON.stringify({ pids: Array.from(live), at: new Date().toISOString() }), 'utf8');
+    // `children` carries the identity; `pids` stays for a reader from an older version, which will
+    // simply find no identities and — by the rule above — refuse to kill anything it cannot verify.
+    const children = Array.from(live, ([pid, identity]) => ({ pid, identity }));
+    writeFileSync(registryFile, JSON.stringify({
+      children, pids: children.map((c) => c.pid), at: new Date().toISOString(),
+    }), 'utf8');
   } catch { /* the registry is a backstop; its failure must not break a turn */ }
 }
 
@@ -63,22 +165,38 @@ function writeRegistry() {
  * Finish off processes left over from a previous (hard-killed) run.
  * Returns how many were killed. Called at loop start and on take-over.
  */
+// These are the most dangerous kills in the framework: the numbers come from a file written by an
+// EARLIER run, which is precisely how long a number needs to be stale before the system hands it to
+// somebody else. Every one of them is therefore checked against the identity recorded beside it, and
+// an entry that cannot be verified is left alone and reported.
 export function sweepStaleChildren(path = registryFile) {
   if (!path || !existsSync(path)) return 0;
-  let list = [];
-  try { list = JSON.parse(readFileSync(path, 'utf8')).pids || []; } catch { list = []; }
+  let entries = [];
+  try {
+    const data = JSON.parse(readFileSync(path, 'utf8'));
+    entries = Array.isArray(data.children)
+      ? data.children
+      // A registry written before v1.15.0 carries no identities. Such an entry is unverifiable, so
+      // it is skipped rather than killed: one leaked orphan is cheaper than one stranger's process.
+      : (data.pids || []).map((pid) => ({ pid, identity: null }));
+  } catch { entries = []; }
   let killed = 0;
-  for (const pid of list) {
+  for (const { pid, identity } of entries) {
     if (live.has(pid)) continue;            // one of our own current children — leave it alone
-    if (killTree(pid)) killed++;
+    if (killTree(pid, { identity })) killed++;
   }
   try { unlinkSync(path); } catch { /* already gone — fine */ }
   return killed;
 }
 
 // Kill one child together with all of its descendants.
-export function killTree(pid, signal = 'SIGKILL') {
+//
+// `identity` is what the process was when we recorded it. Pass it whenever the number came from a
+// record rather than from a handle we are holding right now — the check is what stops a recycled
+// number from turning a cleanup into an attack on somebody else's work.
+export function killTree(pid, { identity = undefined, signal = 'SIGKILL' } = {}) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (identity !== undefined && !stillOurs(pid, identity)) return false;
   try {
     if (process.platform === 'win32') {
       // /T — together with the descendant tree, /F — forcefully.
@@ -90,11 +208,12 @@ export function killTree(pid, signal = 'SIGKILL') {
   } catch { return false; }
 }
 
-// Kill every live child. Returns how many were killed.
+// Kill every live child. Returns how many were killed. Each is verified first: even our own records
+// go stale the moment a process exits, and this runs on every exit path.
 export function killAllChildren() {
   let killed = 0;
-  for (const pid of Array.from(live)) {
-    if (killTree(pid)) killed++;
+  for (const [pid, identity] of Array.from(live)) {
+    if (killTree(pid, { identity })) killed++;
     live.delete(pid);
   }
   writeRegistry();
@@ -167,13 +286,15 @@ export function runCliAsync(bin, args, opts = {}) {
       : spawn(bin, args, { ...rest, detached: true });
 
     if (child.pid) {
-      live.add(child.pid);
+      live.set(child.pid, processIdentity(child.pid));
       writeRegistry();
       // A moment later the intermediary has spawned the engine itself — record that one too.
       if (process.platform === 'win32') {
         const followUp = setTimeout(() => {
           if (!live.has(child.pid)) return;             // the turn already finished
-          for (const grandchild of descendantsOf(child.pid)) live.add(grandchild);
+          for (const grandchild of descendantsOf(child.pid)) {
+            live.set(grandchild, processIdentity(grandchild));
+          }
           writeRegistry();
         }, 1500);
         followUp.unref?.();
@@ -232,8 +353,8 @@ export function runCliAsync(bin, args, opts = {}) {
       if (child.pid) {
         live.delete(child.pid);
         // Grandchildren of a finished turn are no longer ours: drop the dead ones from the registry.
-        for (const pid of Array.from(live)) {
-          try { process.kill(pid, 0); } catch { live.delete(pid); }
+        for (const [pid, identity] of Array.from(live)) {
+          if (!stillOurs(pid, identity)) live.delete(pid);
         }
         writeRegistry();
       }

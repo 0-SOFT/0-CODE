@@ -155,3 +155,59 @@ test('stamp: clearing the instruction explicitly is allowed and removes the pass
     assert.equal(fm.next_step_prompt_meta, undefined, 'an empty instruction has nothing to validate');
   } finally { p.cleanup(); }
 });
+
+// --- v1.14.0: the clock the silence watchdog reads ---------------------------------------------
+//
+// FOUND BY MEASUREMENT, not by reading. core/gates.mjs states that "lib/update-state.mjs has
+// written last_action_at since the first version". No line of the tool ever did. The field was
+// filled in by hand, by agents, in whatever patch they happened to remember it in — so the v1.8.0
+// silence watchdog was reading a hand-maintained cache, which is precisely the defect class v1.7.0
+// exists to prevent, reintroduced elsewhere.
+//
+// Measured on this repository: two state patches were applied in a row and last_action_at stayed at
+// a value written six hours earlier, while the watchdog reported "STATE has not changed for 355
+// minutes" on a project that had just changed twice.
+
+test('the clock is wound by the tool, not by whoever remembers to write it', () => {
+  const p = mkTempProject({ iteration: 1, last_action_at: '2020-01-01T00:00:00Z' });
+  try {
+    const before = Date.now();
+    assert.equal(apply(p.stateFile, '{"last_action":"did a thing"}').status, 0);
+    const stamped = Date.parse(readFrontmatter(p.stateFile).last_action_at);
+    assert.ok(Number.isFinite(stamped), 'the stamp must be a readable time');
+    assert.ok(stamped >= before - 1000, 'and it must describe this write, not an old one');
+  } finally { p.cleanup(); }
+});
+
+// The trap this design has to avoid, and the reason a flag would have been the wrong answer: the
+// drivers write to STATE on EVERY turn. If their bookkeeping wound the clock, the watchdog could
+// never fire — it would be barking at its own tail, exactly as core/turn-progress.mjs describes for
+// the progress detector. So the rule is derived from what the patch actually touches, and a driver
+// has no way to claim otherwise.
+test('driver bookkeeping does not wind the clock, or the watchdog would watch itself', () => {
+  const p = mkTempProject({ iteration: 1, last_action_at: '2020-01-01T00:00:00Z' });
+  try {
+    assert.equal(apply(p.stateFile, '{"iteration":2,"last_session_id":"s","session_count":3}').status, 0);
+    assert.equal(readFrontmatter(p.stateFile).last_action_at, '2020-01-01T00:00:00Z',
+      'a turn that only counted itself is not an action');
+    assert.equal(apply(p.stateFile, '{"budget_metrics":{"version_cost_usd":0.5}}').status, 0);
+    assert.equal(readFrontmatter(p.stateFile).last_action_at, '2020-01-01T00:00:00Z',
+      'nor is recording what the turn cost');
+  } finally { p.cleanup(); }
+});
+
+test('a patch that mixes bookkeeping with real work still counts as work', () => {
+  const p = mkTempProject({ iteration: 1, last_action_at: '2020-01-01T00:00:00Z' });
+  try {
+    assert.equal(apply(p.stateFile, '{"iteration":2,"running_jobs":[]}').status, 0);
+    assert.notEqual(readFrontmatter(p.stateFile).last_action_at, '2020-01-01T00:00:00Z');
+  } finally { p.cleanup(); }
+});
+
+test('an explicit stamp in the patch is respected — the tool does not overrule the author', () => {
+  const p = mkTempProject({ iteration: 1 });
+  try {
+    assert.equal(apply(p.stateFile, '{"last_action":"x","last_action_at":"2031-05-05T05:05:05Z"}').status, 0);
+    assert.equal(readFrontmatter(p.stateFile).last_action_at, '2031-05-05T05:05:05Z');
+  } finally { p.cleanup(); }
+});

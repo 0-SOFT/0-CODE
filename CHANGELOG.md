@@ -9,6 +9,661 @@ All notable changes to this project are documented here. The format follows
 > below records what changed and — more usefully — **what was learned**. Where a decision was later
 > reversed, the reversal is listed too: this project treats a disproven assumption as a result.
 
+**Current release: v1.19.0.** Measured on 2026-09-02, from the published tree run as a real git
+repository: **476 tests** (5 announced as skipped there, because they exercise a tool that is
+deliberately not published), **131 smoke checks** with 6 announced as skipped, **31 source modules**
+at or above 80 % of lines, **124 files** exported with no secrets and nothing untranslated. Branch
+coverage is reported but deliberately not gated — the lowest is `hooks/ralph-loop-stop.mjs` at 12.5 %,
+which is what a module exercised only through a subprocess looks like from here.
+
+---
+
+## [v1.19.0] — 2026-09-02 — the public tree catches up, and the gate that guards it had a hole
+
+Six releases of work had never reached the public repository. Moving them across turned up two
+defects that a straight copy would have shipped, and one that would have gone out unnoticed.
+
+### The numbers had drifted for the second time, so they were removed instead
+
+```
+README.md        claimed 378 tests, 119 end-to-end
+GUIDELINE.md     claimed 360 tests, 129 smoke
+CONTRIBUTING.md  claimed 378 tests, 119 end-to-end
+measured                476 tests, 137 smoke
+```
+
+Three files, three different stale figures, disagreeing with each other as well as with reality. The
+v1.12.0 entry in this file describes fixing exactly this by hand — "numbers from six releases
+earlier" — and six releases later it was back. Fixing it by hand a third time is doing the same thing
+and expecting a different result, so the choice of remedy was written down first.
+
+The measurement that decided it: of 33 places in published documents carrying a number, **26 are
+historical** — per-release figures in this changelog, which are facts about the past and must *not*
+match today. A guard would therefore need a marker to tell live from historical, and once there is a
+marker you are most of the way to generating the block anyway. Meanwhile the live surface is five
+numbers in three files, and in two of them the number sits in a code comment describing what a
+command printed once. A comment should say what a command *does*.
+
+So the live numbers are gone from prose, and the one that remains lives at the top of this file. The
+arithmetic was not close — 31.5 against 12, 10 and 9.6 — and the record says which option lost to
+what. It also says what would disprove the choice: if this header itself goes stale by the next
+release, one visible place was not enough and the block has to be generated.
+
+### Six versions of mechanisms nobody could have discovered
+
+```
+long-running work / running_jobs   documented only in the failure catalogue
+one owner per loop, liveness       documented only in the failure catalogue
+two-modes.md                       NOWHERE — the file existed, nothing linked to it
+decision records                   NOWHERE
+roadmap review                     NOWHERE
+/productionaudit, /productionauditloop   NOWHERE
+acceptance criteria                NOWHERE
+```
+
+This is the inverse of the defect this project usually finds. Normally a claim stops matching the
+behaviour; here the behaviour was never claimed at all. A reader would have received the code and had
+no way to learn it was there — worse than a stale number, because a stale number is at least visible.
+
+Each now appears where someone looking for it would look: a row in the README table, a section in the
+guideline, and a link to `docs/two-modes.md` from the documentation index. The annotated structure map
+had also been broken since v1.13.0 — a new module was inserted *into the middle of another module's
+description*, splitting it — and four later modules were missing from a map whose job is to list every
+file.
+
+### The gate that guards publication could not see the file it should have caught first
+
+The export refuses to publish secrets or untranslated text, and it announced a clean tree. An
+independent check then found **212** matches of the forbidden alphabet in `.gitattributes`, comments
+that would have gone public.
+
+The gate selected files **by extension**, and a name with no extension matched nothing in its list.
+Four published files are in that position: `.gitattributes`, `LICENSE`, `hooks/ralph-loop-stop` and
+`config/.env.example`. It is the same shape as the guard defect fixed one release earlier — a rule
+written against the form of a name when the danger is in the content — and it had no tests at all,
+which is why it survived.
+
+**The first fix almost shipped with its own hole, of the same family.** Deciding "is this text?" by
+looking for a NUL byte means a file that is text in every other respect but contains one is skipped
+in silence — and the very test file written for this fix contained a real NUL, so the repaired gate
+looked straight past its own untranslated fixtures and called the tree clean again. The root was not
+the NUL: "no verdict" and "clean" were the same answer, which is the distinction v1.13.0 exists for
+and v1.18.0 already repeated once. A file that is neither plainly text nor a known binary is now
+reported rather than skipped.
+
+The gate now has tests, and they are written to survive publication: they skip themselves aloud in a
+tree where the tool is absent, and they build their forbidden sample from code points so that the
+test does not smuggle in the thing it tests for.
+
+### The public tree
+
+Refreshed to v1.19.0 and audited from inside itself, as a real git repository: 476 tests with 5
+announced skips, 131 smoke checks with 6 announced skips, every source module at or above 80 % of
+lines, and an independent sweep finding zero forbidden characters and zero binary bytes across 126
+files. Internal directories — prompts, reports, decisions, session logs, the owner's own notes — are
+absent, and `config/.env.example` carries names with every value empty.
+
+**Nothing was published.** The commit sits in the local public repository, which has no remote
+configured; releasing it is the owner's action, by hand.
+
+---
+
+## [v1.18.1] — 2026-09-02 — a hard rule with a hole in the only shell that matters
+
+A one-rule release, and the rule is the one whose failure cost the most in this project's history.
+
+`core/safety.mjs` has forbidden killing Claude or node **by image name** since v1.2.1, for a reason
+its own comment states plainly: it takes down every session on the machine, including the loop's own.
+On 2026-09-01 an agent in this repository ran
+
+```
+taskkill //FI "IMAGENAME eq claude.exe" //F
+```
+
+the guard **allowed** it, and a Claude Code session belonging to an unrelated project died mid tool
+call. Measured after the fact, side by side:
+
+```
+taskkill /IM claude.exe /F                     -> deny
+taskkill //FI "IMAGENAME eq claude.exe" //F    -> allow
+```
+
+Neither half of the second spelling is exotic. The doubled slash is what MSYS/git-bash requires on
+Windows so the shell does not rewrite `/F` into a path — it is how every Windows flag has to be
+written in the shell this framework actually runs its commands in. And `/FI "IMAGENAME eq ..."` is
+the documented filter syntax, not a trick. The rule matched one spelling of the thing it forbids.
+
+**The root is not the missing spelling.** A rule written against a command line will always be one
+spelling behind, because the next accident writes it differently again. What is dangerous is
+**selecting processes by name**; which flag expresses the selection is an accident. The rule now says
+that: the image-name flag in either slash form, the filter form that names the selector in its value
+rather than its flag, and PowerShell's `-Name`, which is the same selector in the other shell on this
+platform.
+
+Killing one process by its id stays allowed in every spelling, because that is the legitimate way to
+stop something and refusing it would cost the loop a turn every time it cleaned up after itself.
+Talking about the command — an `echo`, a `grep`, a commit message — is still text rather than an act,
+which matters because the tests for this rule contain the strings.
+
+**Worth naming for what it says about verification.** The rule was covered by tests, and the tests
+passed, because they exercised the spelling the author had in mind. The incident was found by reading
+a session log, and the hole was found by putting the exact failing command through the live hook
+rather than through the module. That is the same method that found every serious defect in v1.2.0 and
+v1.3.0: check the claim by behaviour, at the boundary where it is actually used.
+
+Tests 471, all source modules at or above 80 % of lines, 137 smoke checks, export clean. No live
+engine run was performed, and nothing was published.
+
+---
+
+## [v1.18.0] — 2026-09-01 — an acceptance criterion stops being decoration
+
+The first version of this project raised by a mechanism rather than by a person or a plan: the
+roadmap review shipped in v1.16.0 fired for the first time and found what nobody had looked at.
+
+```
+open acceptance criteria ..................................... 46
+  saying out loud that they were not met ..................... 2
+  saying nothing ............................................ 44
+```
+
+Forty of the silent ones belonged to versions declaring themselves RELEASED. From the roadmap there
+was no way to tell a version that fell short of its own bar from one where somebody forgot a tick.
+
+**The price of that silence was measured the same day.** v0.9.0 had carried an open criterion — "the
+>=80 % threshold for lines **and branches** is met" — since release. The first real audit run
+(v1.17.0) rediscovered exactly that, four versions later: the coverage gate had never checked
+branches, and the two files that decide whether the loop continues and whether a dangerous command
+runs sat at 12.5 %. The roadmap knew. Nobody read it.
+
+### The arithmetic disagreed with the author, and was right
+
+Where to put the check was decided in the open. The instinct was a barrier at the moment of release,
+the way both existing barriers in this project work. The numbers said otherwise: 28 against 18, and
+the difference was cost — a barrier would have coupled the state tool to the format of a document it
+has no other reason to know, for two points of impact out of nine. It is the first time the mechanism
+shipped in v1.16.0 changed a decision instead of confirming one.
+
+### The rule had to be derived from data three times
+
+The marker for a deliberately open criterion is a **shape, not a word** — a bold opening ending in a
+colon, then a reason — because this module is published, the export guard refuses Cyrillic, and a
+target project's roadmap may be in any language. Whether a version counts as released is read from
+its status word, not its title: all 32 versions carry one, in English, in backticks. And a reason
+that **wraps onto the next line** is still one reason — reading only the first line, the guard called
+one of the two deliberately excused criteria silent, because the words that made it substantial were
+one line below.
+
+### Forty triaged
+
+```
+closed with evidence ..................................  9
+declared not met, or withdrawn ........................ 31
+still silent ..........................................  0
+```
+
+Nine out of forty is the honest share of what had ever been verified. Withdrawn as moot: everything
+about Cline (removed in v1.4.0, zero mentions left in the code), the VS Code mode, MANUS_API_KEY,
+santa-method, attempts_per_task. Withdrawn separately: a criterion asking for "a direct YES on whether
+the functionality is guaranteed" — it closes with a word rather than evidence, which is the class this
+version exists to end.
+
+Not met and now saying so: the fifty-step run, restart under PM2, an autonomous OpenCode run, the
+cost comparison, long-prompt delivery, twenty operations without permission prompts, a real commit on
+Kimi K3. Several of those need live engine runs, forbidden since the incident in v1.15.0.
+
+### The guard was itself the thing it guards against
+
+Its first version did **not** turn red on a planted silent criterion. The module was imported by an
+absolute Windows path as a bare specifier — modules do not load that way — the error went to
+/dev/null, and empty output was read as "clean".
+
+The root was not the path. Absence of output meant **two different things**: "clean" and "the check
+did not run". That is the same distinction v1.13.0 exists for, where a missing completion marker meant
+both "still working" and "died". A guard against unfalsifiable checks was an unfalsifiable check.
+It now prints a word when clean, so emptiness means breakage — proven by planting one and watching it
+fail.
+
+### Found after the release, by running the suite from the published tree
+
+The release notes above were written from the working tree. Running the same suite from the tree the
+manifest actually produces turned up **six failures**, and the split is worth recording.
+
+Five were an artefact of how the check was made rather than of the code: the exported directory was
+not a git repository, and the ignore-policy and secret-scan tests ask git directly — deliberately,
+since a rule that is written down and a path git actually refuses are different claims. Initialised
+as a repository, which any published tree is, all five pass.
+
+The sixth was real and was this version's own. The test pinning the roadmap measurement read
+`docs/ROADMAP.md` unconditionally — a file the manifest deliberately does not publish, because it is
+the plan for developing the framework rather than part of the product. So it passed where it was
+written and failed where it would be used. **v1.12.0 records exactly this blind spot**, in almost the
+same words, about a guard that hard-coded an unpublished development tool. One release later, the
+same author repeated it.
+
+The test now asserts something true in both trees: where the roadmap exists its numbers are pinned,
+and where it does not, the property that matters is that its absence accuses nobody of anything.
+
+Tests 468, coverage gate run the way CI runs it, 137 smoke checks in the working tree and 131 plus 6
+announced skips from the published one, export clean at 123 files. No live engine run was performed,
+and nothing was published.
+
+---
+
+## [v1.17.0] — 2026-09-01 — an audit becomes data, and the first real one found four defects in the gates
+
+`/productionauditloop` is meant to run until P0 + P1 + P2 = 0. That condition cannot rest on the
+agent's word: an agent able to declare the loop finished will finish it by declaring, and the
+declaration will be sincere — it is very easy to believe you are done. So findings had to become
+countable by something that is not the agent.
+
+### Where the ledger lives, and the measurement that overturned the assumption
+
+The work began from "the `docs/todo` format is already half-structured, just parse it". Across the
+ten existing files:
+
+```
+checklist lines .................................... 231
+matching the tidy `- [ ] **P0-001**` shape .........  19
+not matching ....................................... 212   (92 %)
+findings carrying a file:line ......................  14
+```
+
+The mismatches are meaningful rather than sloppy — `**P2-002 + P2-003**` is one fix closing two
+findings, `**P2-011/P3-011**` is a finding whose level depends on where you stand. The format was
+never meant for counting, and a parser generous enough to read it would produce a number people
+believe.
+
+So the ledger is a machine-readable head on the very file all four audit templates already require,
+with the prose below left to humans. No new artefact, and — the reason this beat a separate JSON file
+— one home for the state of a finding. Two homes drift; that is the class v1.7.0, v1.7.1 and v1.14.0
+were each spent on. Unlike the threshold decision one version earlier, here the arithmetic settled it
+cleanly: 24 against 12.8.
+
+### Against the degenerate exit
+
+An audit that looked at nothing finds nothing, and zero then reads exactly like a clean pass. So
+coverage is required of **every** ledger and not only of the clean ones: a line written solely to
+reach zero would be written to reach zero. Marking a finding fixed or rejected requires evidence,
+because "fixed" on its own is the agent's word again in a different hat. A ledger that does not
+validate never ends the round: proving nothing is not the same as finding nothing. And a dimension
+with no ledger is not a clean dimension — it is one that never ran.
+
+One clean round is enough, decided rather than assumed: a clean round already runs *after* the fixes
+it verifies, so a second one with nothing changed between them could only find what the first missed,
+which is a question about coverage rather than about repetition.
+
+### The first real run found four defects — in the gates themselves
+
+- **The coverage gate reported wider than it checked.** It compared line coverage only and announced
+  "all source modules are at or above 80%". Measured at that moment: the Stop hook and the safety
+  guard — the two files that decide whether the loop continues and whether a dangerous command runs
+  — were at **12.5 % of branches**. Roughly one branch in eight, and the gate said fine.
+- **The vacuity guard could only see total vacuity.** Had one directory of three stopped being
+  recognised, plenty of rows would have remained and the gate would have passed on a measurement that
+  had quietly lost `hooks/`.
+- **The module guarding the gate was covered worse than the gate**, at 50 % of functions, having
+  broken twice by its own comment.
+- **The gate is opt-in, and its absence was silent.** Without `--coverage-min` the suite still prints
+  the whole percentage table and checks nothing. Measured on the author: every coverage claim made
+  during that session came from reading the table by eye while the gate sat idle. It was found only
+  because fixing the first defect forced a run the way CI runs it.
+
+All four are closed with evidence in the ledger. A branch threshold was deliberately **not**
+introduced: choosing one is a decision with a real cost, and the change that stops a report
+overstating itself should not quietly impose another gate. The gate now names the worst module and
+says plainly that a subprocess reports low branches even when tested.
+
+### Confirmed the same day by a different mechanism
+
+The roadmap review shipped in v1.16.0 fired for the first time and independently found the same
+thing: v0.9.0 has carried an open acceptance criterion — "the ≥80 % threshold for lines **and
+branches** is met" — for four versions, and nobody had looked. Two mechanisms built for different
+purposes converging on one defect is the best evidence available that the defect is real rather than
+invented to suit the mechanism.
+
+That review also changed the plan for the first time in the project's history: one version withdrawn,
+one added.
+
+Tests 456, the coverage gate run the way CI runs it, 135 smoke checks, export clean. No live engine
+run was performed, and nothing was published.
+
+---
+
+## [v1.16.0] — 2026-09-01 — a decision stops being flat, a plan stops being permanent
+
+Two complaints from the project's owner, one root: the agent does not revisit its own thinking. It
+takes the first workable idea, and it follows a plan it wrote long ago even after the work has shown
+the plan to be wrong.
+
+Both were measured before either was fixed:
+
+```
+version prompts carrying a brainstorm .......................  21 of 52   (40 %)
+reports naming a rejected alternative .......................  11 of 72   (15 %)
+versions ever cancelled, dropped or reordered in the roadmap ...  0  of 25+
+```
+
+Eighty-five per cent of the work shipped without one alternative ever named. And no plan, across
+twenty-five releases, was ever changed: either it was right every time, or nobody looked.
+
+**It is not laziness, and the distinction shaped the fix.** Where a prompt asked for the
+alternatives, the alternatives are there and they are substantial. The practice lived in a document
+rather than in a mechanism, so it switched on when instructed and off when not. Observed on one agent
+inside a single session: choosing the loop lock's liveness evidence went through four options with
+one measured and rejected; choosing a process identity an hour later took the first thing that came
+to mind. Same day, same care, different instruction.
+
+### Decision records
+
+A record under `docs/decisions/<version>_<name>.md` now has a shape a machine can check: at least
+three options — two is a fork, and the second is usually there to make the first look chosen — each
+with impact, confidence and cost on one scale, **and a basis**, which is either a measurement or an
+assumption named as one. A number without a basis is an opinion wearing a digit, and three of them
+multiplied together look like arithmetic. Everything not chosen says why it lost. The record says
+what would show the choice to be wrong, checked for substance by the very function the safety guard
+uses on its confirmations — one judgement, one implementation.
+
+**The score is never stored.** `(impact × confidence) / cost` is computed on read, and a record
+carrying a written score is refused rather than tidied: a copy of numbers that live three lines above
+it will one day disagree with them. That is the defect class v1.7.0 and v1.14.0 were each spent on,
+and it is closed here before it can be introduced.
+
+The mechanism cannot know whether a given version needed a record, so it does the one thing that
+closes the silent case: **whether a record exists for the version in flight is printed in the
+continuation header every turn.** A flat decision can no longer look exactly like a considered one.
+
+### The roadmap reviews itself
+
+Every ten turns the step instruction is *replaced* by a review of the remaining plan against what the
+work has since shown — replaced, not appended, because a directive at the end of a long text leaves
+the agent doing what it was already doing. Recording the review without saying what came of it is
+refused on the way in, by the same barrier that has guarded the step instruction since v1.7.0: "all
+fine" is not an outcome, and a review that cannot fail is not a review.
+
+The threshold was chosen in the open, and the record is on disk. Ten turns is three to four finished
+versions at the measured rate of 2–3 turns per version. What is worth reporting is that **the
+arithmetic did not settle it**: ten turns scored 24.5 and twenty-five scored 24, a gap of two per
+cent, and the record says so instead of pretending the numbers decided. What decided was the point
+itself — a plan that went twenty-five versions unexamined is not fixed by a threshold that permits
+ten more. Without the formula, "ten" would have looked like a reasoned number while being the first
+one that came to mind.
+
+### Found by using the mechanism on itself
+
+The first record was written with YAML folded blocks (`>-`), which `lib/yaml-mini.mjs` deliberately
+does not support — and it silently became "no record": a written decision that looked exactly like a
+decision nobody took. A silent failure, built into the mechanism against silent failures. It now
+names itself as unreadable and says what is not supported. The parser was left alone: it is the only
+reader of `docs/STATE.md`, and risking it for the sake of line breaks is not a trade worth making.
+
+### What this does not do
+
+It makes the agent look. It cannot make it see. That is recorded as the decision's own falsifier: if
+ten versions from now the roadmap has still never changed, the mechanism does not work, and that will
+have to be admitted rather than explained.
+
+Tests 433, every module at or above 80 % line coverage, 134 smoke checks, export clean. No live
+engine run was performed, and nothing was published.
+
+---
+
+## [v1.15.0] — 2026-09-01 — the supervisor becomes an equal driver, and a cleanup stops guessing
+
+Planned as an audit of the external loop driver against five measured defects. What it is remembered
+for is the sixth, which was not measured but suffered: a live supervisor run **destroyed a Claude
+Code session belonging to an unrelated project**, cut off mid tool call.
+
+That goes first here on purpose. A changelog that files the incident under general improvements is
+itself the defect class this project exists to close.
+
+### The incident, and its two roots
+
+`spawn-cli.mjs` opens by explaining that killing engine processes by image name was rejected because
+it "would also take down the user's unrelated processes". The registry built instead reached the same
+outcome by another route: `sweepStaleChildren` read process numbers out of a file written by an
+**earlier** run — exactly stale enough for the system to have issued them again — and handed each to
+`taskkill /T /F` with no check that the number was still ours. A guard whose own justification names
+the harm, and then permits it through a side door, is this project's recurring defect at the highest
+price it has yet charged.
+
+Every recorded child now carries an identity: the moment the process was created, which a recycled
+number will not reproduce. Nothing is killed unless the identity still matches, and a child whose
+identity cannot be established is **not killed at all** — a leaked orphan costs memory, a destroyed
+stranger costs somebody's work. Registries written before this version carry no identities and
+therefore kill nothing.
+
+The second root: `cwd` defaulted to `process.cwd()`, so a supervisor driving one project's state ran
+the engine in whatever directory it had been launched from — in the incident, a real Claude Code
+session started inside the framework repository beside a session already working there. Which project
+the state belongs to and which project the engine runs in are now derived from one source.
+
+Nothing written was lost: a transcript survives its process, and `claude --resume <session-id>` brings
+the session back at its last message. The rule that came out of it is recorded in `failure-modes`: a
+live engine run is not a cheap check — it starts a real agent with real permissions in a real
+directory, and the framework may force-kill process trees around it.
+
+What cannot be shown is that the destroyed session went through that particular sweep. The timing and
+the mid-tool-call cut are enough to name the cause; the chain from a specific number to a specific
+process is not recoverable, and it is not claimed.
+
+### The five defects the version was opened for
+
+- **One rule in two implementations.** "Two empty turns escalate, three record a blocker" lived on
+  disk for the Stop hook and in a local variable for the supervisor, so restarting a run reset the
+  count and the blocker could never arrive. Both drivers now share one storage, one function and one
+  pair of thresholds. Putting that memory in `docs/STATE.md` was rejected on a measured basis: the
+  hash of STATE is itself one of the progress signals, so the watchdog would be barking at its own
+  tail.
+- **`--max` without a usable number meant no limit at all.** `parseInt` gave `NaN` and `loops >= NaN`
+  is false for ever, so asking for a cap and mistyping the number bought an unbounded unattended run.
+  Every option that takes a value now refuses rather than guesses.
+- **The engine self-check ran before the gates.** Starting on a finished version spent a paid call in
+  order to then announce there was nothing to do.
+- **The lock was eight times shorter than a turn.** `loop-lock.mjs` claimed a turn is capped at
+  15 minutes and that 30 minutes therefore gave a twofold margin. The constant is four hours. The
+  claim was carried forward unchecked while that file was being rewritten one version earlier — which
+  is how a false comment survives a rewrite: it reads like a conclusion somebody already verified. A
+  turn now proves it is alive while it runs, which also gives "alive but the heartbeat is old" its
+  meaning back.
+- **Engine processes outlived `runLoop`.** Cleanup was wired only to process exit, so used as a
+  library — how a wrapper and every test uses it — an abandoned loop left its engine running.
+
+A sixth came out of the probe written for the last of those: after losing the lock mid-turn, the
+supervisor still wrote its bookkeeping into the state — the exact corruption the lock exists to
+prevent. That path had no test and no reader had noticed it, which is the argument for probes that
+use real processes.
+
+### Two modes, written down
+
+`docs/two-modes.md` sets the Stop hook and the supervisor side by side: what each can and cannot do,
+how to start and stop it, and what must never be run at once. Use the hook when you are at the
+keyboard; use the supervisor when the run has to survive an outage or respect a spending cap, which
+is the only mode where that cap works. Its price is stated plainly — every turn starts from a blank
+slate, so anything worth remembering has to be in `docs/STATE.md`.
+
+Tests 411, every module at or above 80 % line coverage, 132 smoke checks, export clean at 114 files.
+No live engine run was performed, and nothing was published.
+
+---
+
+## [v1.14.0] — 2026-09-01 — liveness is measured by something that lives
+
+Reported as "a second Claude Code session in the same project fights the first one for the loop".
+There was a guard against exactly that, ten lines of comment explaining it, and a test covering it.
+It had never once run.
+
+**The root, measured rather than reasoned about.** The Stop hook wrote the loop lock without saying
+what proved it alive, so the lock recorded the hook's own process number — and a Stop hook is a
+program that lives for milliseconds at the end of a turn. On a lock written a moment earlier:
+
+```
+the lock was written by session A, heartbeat age 0 seconds
+  ownerState -> dead
+```
+
+Every subsequent invocation, from any session, saw a dead owner and took the loop over. The branch
+that compared session ids sat below a condition that could never be true.
+
+**A longer deadline could not have fixed it.** Liveness is judged before staleness, so the deadline
+was never consulted. What had to change was the witness.
+
+Evidence of life is now an explicit part of the lock, and each kind answers in the way its own
+physics allows: a **process** is put to the kernel, a **file** tops the heartbeat up with its
+modification time, a **heartbeat** speaks alone when there is nothing external to ask. The Stop hook
+registers the session transcript, because that file lives exactly as long as the session does —
+measured on a live session at 10.9 MB, last written 0.4 seconds ago, while the hook's own process
+was already gone. Identity comes from the same field, which is what lets one session keep its own
+lock across turns even though every hook process has a different number.
+
+There is deliberately no `if (engine === 'stop-hook')`. Branching on a driver's name rather than on
+what it can prove is how one special case becomes three. Locks written before this version carry no
+evidence field and are read exactly as they always were.
+
+**The alternative was tried, not dismissed.** If the hook's parent were the long-lived Claude Code
+process, that would be exact, kernel-checkable evidence, strictly better than a file. A real Stop
+hook was made to record its parent; on the next turn the parent was dead too — the hook is launched
+through a shell wrapper that exits with it. The idea is written into the module so the next reader
+does not spend the same measurement discovering the same thing.
+
+### The mechanism from v1.13.0, audited against the physics of its own signals
+
+Four corners where the classifier answered more confidently than its evidence allowed:
+
+- **A process number is not a name.** The operating system reissues it, so a job that died hours ago
+  could appear alive wearing somebody else's process and be reported as running for ever. A written
+  marker is evidence the job produced about itself, so it now outranks liveness. The price is stated
+  rather than hidden: the log must be truncated when the job starts.
+- **"Gone, and no marker was declared" meant finished** — and also covered a job that never started.
+  The log file separates them: a job that ran left a file behind, a job that never started did not.
+- **A deadline that could not be read silently never fired.** Self-contradicting records now produce
+  named warnings: a deadline before the start, a marker with no log to look for it in, a record with
+  no usable process number.
+- **Terminal records accumulated in silence.** Deleting one would decide on the agent's behalf that
+  the result had been collected, so the registry asks instead, every turn, until it is cleared.
+
+### Found while measuring: the silence watchdog was reading a hand-written clock
+
+`core/gates.mjs` stated that `lib/update-state.mjs` "has written `last_action_at` since the first
+version". No line of that tool ever did. Agents filled the field in by hand, in whatever patch they
+happened to remember it in, so from v1.8.0 the watchdog that reports "STATE has not changed for N
+minutes" was reading a cache nobody maintained. Measured here: it announced 355 minutes of silence
+on a project that had changed twice in the preceding hour.
+
+The tool now stamps the field itself. It deliberately does **not** stamp for the loop drivers' own
+bookkeeping — iteration, session id, session count, cost — because both drivers write on every turn,
+and a watchdog fed by the loop's own counting would be barking at its own tail. The rule is derived
+from what a patch touches rather than declared by a flag, so a driver has nothing to declare.
+
+This is the same defect class v1.7.0 closed for the step instruction — a cache with no invalidation
+— reintroduced in a different place. Twelfth recorded instance in this project, and the second in a
+row caught by a check rather than by a person: the export guard also found Cyrillic in the test
+fixtures written for this very version.
+
+### Acceptance
+
+Three transitions, on a stand-in project driven by the real hook: session A takes the loop; session
+B is refused, told who holds it and how to take it deliberately, and ends as an ordinary session; A
+keeps driving; A goes quiet for forty minutes; B takes over.
+
+Tests 401, coverage at or above 80 % for every module, 132 smoke checks, export clean at 114 files.
+Nothing was published.
+
+---
+
+## [v1.13.0] — 2026-09-01 — waiting stops being idling
+
+Reported as "the loop keeps stopping while a test run finishes and never recovers". The measurement
+told a different story: it was not stopping. It was standing still, in a way nobody could see.
+
+In one real session `sleep` appeared **447 times**, across thirty-nine `until … ; do sleep N; done`
+loops, with pauses of up to 900 seconds inside a single tool call — while the framework's own
+background mechanism was used exactly once. The human intervened 124 times, asking in four different
+phrasings whether the loop was working or standing still.
+
+**The root was an absence rather than a bug.** The framework had no idea a long job could exist, so
+the agent used the shell as its scheduler. A turn is where the loop acts and it is the loop's only
+spendable resource; a turn spent asleep produces nothing — no git change, no state change — which is
+also precisely what a hung turn looks like from outside. Neither the drivers nor the human could
+tell the two apart.
+
+**Why a completion marker is not enough**, which is the part worth remembering. `until grep -q
+MARKER log` waits for ever when the job dies before writing its marker, because the absence of a
+marker means two different things. Liveness of the process separates them:
+
+```
+alive · no marker   → running
+dead  · marker      → finished
+dead  · no marker   → DIED — the case that used to hang for ever
+```
+
+Plus one the pair cannot express: alive but past the time it was expected to take. That stops
+nothing — it is a fact worth telling an agent, because a job running far longer than expected
+usually means something it can act on.
+
+So `running_jobs` in the state file is now something the loop understands. Start the work in the
+background, record it, **end the turn**. Every continuation then reports where each job stands, in
+the same block that already carries the version and the blockers:
+
+```
+jobs: running: 1 (suite) | overdue: 0 | died: 1 (broken) | finished: 0
+```
+
+Checking costs milliseconds — four real processes classified in three — because checking is not
+waiting, and that distinction is the whole point.
+
+The guard gained an advisory rule for blocking waits, active only in `confirm` mode: it names what a
+sleep costs and points at the alternative rather than merely refusing. The threshold is 60 seconds,
+taken from the measurement rather than from taste — in that session the harm came from 200–900
+second pauses while 5–15 second ones were routine and harmless.
+
+**A limit that cannot be fixed in code, now stated.** The same session contains six
+`ConnectionRefused` / `ENOTFOUND` errors; the human rebooted the network and asked the agent whether
+it was still there. The Stop hook cannot survive the platform going down, because it lives inside the
+process that dies: there is no turn to run and nothing to restart it. `core/supervisor.mjs` is an
+external driver and does survive it. That is a property of the driver you choose, and it is now
+written down in both the README and the failure catalogue.
+
+Tests 378 (from 360), 27 source modules at or above 80% of lines, smoke 130/0.
+
+---
+
+## [v1.12.0] — 2026-08-31 — the documentation audit before publication
+
+Preparing the public tree for its second release meant checking what the documentation claimed
+against what the code did. Eight discrepancies, and all of one kind: **a lead sentence left behind by
+its own list.**
+
+README and GUIDELINE both opened with "exactly four things stop the loop" directly above a list in
+which two of the four were marked "off unless you set it" — the lists were corrected when limits
+became opt-in, the sentences above them were not. GUIDELINE named three guard modes when there were
+four. The structure map promised "230 tests plus 117 smoke checks", numbers from six releases
+earlier. An example state file in the plugin readme was five releases out of date.
+
+Edit a list, forget the sentence above it. Worth naming, because it is not carelessness — it is what
+happens when the change is real and the framing around it is invisible.
+
+**Two usability defects that an audit of claims cannot find**, because both were true as statements
+and broken as instructions. The quickstart told a reader hitting a permission prompt to run
+`node tools/doctor-permissions.mjs` — from their own project, where `tools/` does not exist, so the
+advice returned `ENOENT`. And the project template promised a "pre-flight check against `claude mcp
+list`", while the actual pre-flight is an engine self-check that never looks at the field in
+question: one name, two different things, and a reader who reasonably assumes the check is automatic.
+
+Both were found by walking the quickstart as a new user would, knowing nothing beyond its text. That
+is now the method for this kind of defect, because reading the claims will not surface it.
+
+**Running the suite from the published tree found a defect again**, as it did for the first release.
+A guard added the previous day hard-coded a development tool that is deliberately not published: it
+passed in the working tree and failed in the published one. A guard that only works in one of two
+trees is half a guard.
+
+`docs/PROVEN.md` was brought up to date — including the parts that make the project look worse, which
+is the only reason that page is worth reading.
+
+Tests 360, 26 source modules at or above 80% of lines, smoke 129/0 from the working tree and 119/0/10
+from the published one.
+
 ---
 
 ## [v1.11.0] — 2026-08-31 — asking instead of refusing
@@ -634,5 +1289,10 @@ loop driver, blockers, model routing, and installation into an arbitrary project
 
 v0.0.1 through v0.9.x built the foundation: the Ralph Loop pattern on a Stop hook, atomic state
 updates with backups, the orchestrator skill, bootstrap and plugin installation, the multi-backend
-core, and the test suite that later grew into the current 234 tests plus 111 end-to-end checks (plus
-6 that a fresh clone announces as skipped).
+core, and the test suite that has since grown to the numbers given at the top of this file.
+
+That sentence used to carry the numbers themselves — "234 tests plus 111 end-to-end checks" — and by
+v1.18.0 it was six releases out of date while reading as a statement about the present. It is the
+same defect this project keeps closing, committed in the file that documents the closing of it: a
+lead sentence left behind by what it describes. Live figures now live in one place, at the top, where
+being wrong is visible.

@@ -81,11 +81,37 @@ export function segmentVerdict(rawSeg, { advisory = false } = {}) {
   if (/^(?:format-volume|clear-disk|format|mkfs(?:\.\w+)?|diskpart)\b/i.test(seg))
     return { level: HARD, reason: 'formatting or wiping a disk' };
 
-  // 3. Mass-killing agent processes by IMAGE NAME: this takes down every Claude Code session and
-  //    the supervisor itself — i.e. it cuts the loop. Killing one process by id
-  //    (`taskkill /PID 1234`, `kill 4321`) is legitimate and left alone.
-  if (/^taskkill\b/i.test(seg) && /(?:^|\s)\/im\s+\S*(?:claude|node)/i.test(seg))
-    return { level: HARD, reason: 'taskkill by claude/node image name would kill EVERY session and the loop itself — use /PID' };
+  // 3. Selecting agent processes BY NAME and killing them: this takes down every Claude Code
+  //    session and the supervisor itself — i.e. it cuts the loop. Killing ONE process by its id
+  //    (`taskkill /PID 1234`, `Stop-Process -Id 1234`, `kill 4321`) is legitimate and left alone.
+  //
+  //    v1.18.1 — WHAT THIS RULE USED TO MISS, and what it cost. It matched only `/IM`, so on
+  //    2026-09-01 an agent in this project ran
+  //
+  //        taskkill //FI "IMAGENAME eq claude.exe" //F
+  //
+  //    the guard ALLOWED it, and a Claude Code session belonging to an unrelated project died mid
+  //    tool call. Neither half of that spelling is exotic: MSYS/git-bash requires the doubled slash
+  //    on Windows so the shell does not rewrite the flag into a path, and `/FI IMAGENAME eq` is the
+  //    documented filter syntax. A HARD rule with a hole in the one shell this loop actually runs
+  //    in is not a rule.
+  //
+  //    So the rule is stated at the level of the danger rather than of the spelling: what is
+  //    forbidden is SELECTING PROCESSES BY NAME. Which flag expresses the selection is an accident
+  //    of the command line, and the next accident will have a different spelling again.
+  const flag = (name) => new RegExp(`(?:^|\\s)/{1,2}${name}\\b`, 'i');
+  const namesAgent = /(?:claude|node)(?:\.exe)?\b/i;
+  if (/^taskkill\b/i.test(seg)) {
+    const byImage = flag('im').test(seg) && namesAgent.test(seg.replace(/(?:^|\s)\/{1,2}pid\b[^\s]*\s*\S*/gi, ''));
+    // The filter form names the selector in its VALUE rather than in the flag.
+    const byFilter = /imagename\s*(?:eq|ne)\s*['"]?\s*(?:claude|node)/i.test(seg);
+    if (byImage || byFilter) {
+      return { level: HARD, reason: 'taskkill selecting claude/node by name would kill EVERY session and the loop itself — use /PID with one process id' };
+    }
+  }
+  // PowerShell is the other shell on this platform, and -Name is its image-name selector.
+  if (/^stop-process\b/i.test(seg) && /(?:^|\s)-name\b/i.test(seg) && namesAgent.test(seg))
+    return { level: HARD, reason: 'Stop-Process -Name claude/node would kill EVERY session and the loop itself — use -Id with one process id' };
   if (/^(?:pkill|killall)\b/i.test(seg) && /(?:^|\s)(?:claude|node)(?:\s|$)/i.test(seg))
     return { level: HARD, reason: 'pkill/killall by claude/node name would kill EVERY session and the loop itself — use a process id' };
 
@@ -195,6 +221,47 @@ export function stripHeredocBodies(command) {
   return kept.join('\n');
 }
 
+// Waiting inside a turn (v1.13.0). Checked on the WHOLE command rather than per segment, because
+// the segment splitter cuts `until …; do sleep 15; done` into three pieces and the loop keyword
+// ends up separated from the sleep it drives.
+//
+// Why advisory and not forbidden: a short pause is sometimes the honest thing, and a refusal costs
+// the loop a turn — which is precisely the waste this rule is about. Asking costs a rewritten
+// command.
+//
+// The threshold, chosen from the measurement rather than by feel: in the session that prompted this
+// release most sleeps were 5–15 seconds and harmless, while the damage came from 200–900 second
+// pauses. A minute is where a pause stops being a pause and becomes a wait — and the loop itself is
+// a better timer than `sleep`, because it can do other work between checks.
+const LONG_SLEEP_SECONDS = 60;
+
+export function waitingVerdict(command) {
+  const text = String(command || '');
+  const hasSleep = /(?:^|[\s;&|])sleep\s+\d/i.test(text);
+
+  if (hasSleep && /(?:^|[\s;&|])(?:until|while)\b/i.test(text)) {
+    return {
+      level: ADVISORY,
+      reason: 'a shell loop that polls with sleep blocks the turn — and a turn is the loop\'s only ' +
+        'spendable resource. If the job it waits for dies, the loop waits for ever. Start it in the ' +
+        'background, record it under running_jobs in docs/STATE.md, and end the turn: the next turn ' +
+        'sees whether it is running, finished or dead',
+    };
+  }
+
+  for (const m of text.matchAll(/(?:^|[\s;&|])sleep\s+(\d+)/gi)) {
+    if (Number(m[1]) >= LONG_SLEEP_SECONDS) {
+      return {
+        level: ADVISORY,
+        reason: `sleeping ${m[1]} seconds spends a turn on nothing. Record the work under ` +
+          'running_jobs in docs/STATE.md and end the turn — the loop is a better timer than sleep, ' +
+          'because it can do other work between checks',
+      };
+    }
+  }
+  return null;
+}
+
 // Main API: the reason the WHOLE command is destructive (first dangerous segment), or null.
 // The v1.10.0 contract, unchanged, including which rules it reports: the OpenCode adapter uses it.
 export function destructiveReason(command) {
@@ -205,12 +272,13 @@ export function destructiveReason(command) {
 // The richer verdict: the reason plus the level that decides what the guard may do about it.
 export function destructiveVerdict(command, { advisory = false } = {}) {
   if (!command || typeof command !== 'string') return null;
-  const segments = splitSegments(stripHeredocBodies(command));
-  for (const seg of segments) {
+  const stripped = stripHeredocBodies(command);
+  for (const seg of splitSegments(stripped)) {
     const v = segmentVerdict(seg, { advisory });
     if (v) return v;
   }
-  return null;
+  // Whole-command rules last: a real danger outranks a note about wasted time.
+  return advisory ? waitingVerdict(stripped) : null;
 }
 
 // The confirmation an agent attaches to a command it has reconsidered and still wants to run.

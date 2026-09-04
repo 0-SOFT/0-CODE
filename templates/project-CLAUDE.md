@@ -44,6 +44,49 @@ Use the `@orchestrator-wrapper` skill on each iteration to:
 > that is already available? This implements two principles — do not invent blockers, and remember
 > your tools.
 
+## Long-running work: start it, then end the turn
+
+**A turn is where you act, not where you wait.** It is the loop's only spendable resource, and one
+spent asleep produces nothing — which is also exactly what a hung turn looks like from outside.
+
+Do not do this:
+
+```bash
+until grep -q DONE log.txt; do sleep 15; done      # the turn is spent, and if the job dies, for ever
+```
+
+Do this instead:
+
+```bash
+nohup npm test > tmp/suite.log 2>&1 &     # start it in the background
+echo $!                                    # note the process id
+```
+
+then record it and **end the turn**:
+
+```bash
+echo '{"running_jobs":[{"id":"suite","pid":12345,"log":"tmp/suite.log",
+      "done_marker":"SUITE FINISHED","expect_by":"2026-01-01T12:00:00Z"}]}'   | node lib/update-state.mjs docs/STATE.md
+```
+
+The next continuation tells you where every job stands, before you ask:
+
+```
+jobs: running: 1 (suite) | overdue: 0 | died: 0 | finished: 0
+```
+
+| State | Meaning | What to do |
+|---|---|---|
+| `running` | alive, marker not written yet | **do other work** — do not wait |
+| `finished` | gone, marker written | read the log, take the result, remove the entry |
+| `died` | gone, marker never written | it did **not** finish — investigate, rather than waiting for ever |
+| `overdue` | alive, past `expect_by` | not a failure; usually worth a look |
+
+Liveness and the marker are separate on purpose: the absence of a marker means two different things
+(still working / died), and that ambiguity is exactly why a polling wait can hang for ever.
+
+Remove an entry once you have taken its result. The register is what is happening **now**, not a log.
+
 ## Limits
 
 This project is created **without** an iteration cap and **without** a spending cap: a limit is set
@@ -60,6 +103,127 @@ by whoever wants one, not handed out by default.
 With no limit set, two things stop the loop: a blocker, and `released_version == current_version`.
 A runaway is still visible: three turns that change nothing produce a `no_progress` blocker, and a
 state file that stops changing is reported in every continuation.
+
+## One session drives the loop; the others simply work
+
+Opening a second Claude Code session in this project is **safe**. It will not pick the loop up. Its
+stderr carries a line like
+
+```
+ralph-loop-stop: the loop is already driven by session 9491c21b…, process 4156, stop-hook,
+started 2026-09-01T13:20:11Z. It will be released once that owner goes quiet, or immediately if
+you delete docs/.loop.lock. This session is not driving the loop and ends normally.
+```
+
+and it behaves like an ordinary session: it ends its turn instead of continuing. That is exactly
+what you want when the second window is open for something else.
+
+**What counts as alive.** Ownership is not decided by a process number — the hook's own number is
+dead milliseconds after it is written — but by something that lives as long as the session does:
+the file its transcript is appended to. While the session is writing, the loop is its own. Once it
+has been quiet for half an hour, the next session takes over on its own, with no human involved.
+
+**To take the loop immediately**, do the one thing the refusal names:
+
+```bash
+rm docs/.loop.lock
+```
+
+**Do not run the Stop hook and the supervisor at once.** The lock will now honestly refuse the
+second one, but that is a guard against a mistake, not a mode of operation. Pick one driver.
+
+## A decision is not whatever came to mind first
+
+Measured across this framework's own history: reports naming **at least one rejected alternative** —
+11 out of 72, or 15 %. In the rest, a reader has no way to tell a decision chosen from several from
+one taken first.
+
+It is not laziness. Where a prompt asked for the alternatives, the alternatives are there and they
+are real. The practice lived in a document rather than in a mechanism, so it switched on when
+instructed and off when not.
+
+**When to write a decision record.** Not for every choice — only where you are choosing **between
+paths that do not reduce to one another**: a new module, a change of contract, the shape of a
+mechanism, a threshold that behaviour depends on. A rite performed over the name of a variable will
+be performed just as emptily over the choice that mattered.
+
+**Where:** `docs/decisions/<version>_<short-name>.md`. The template and the rules live in
+`docs/prompts/templates/decision.md`.
+
+What the machine checks: at least three options (two is a fork, and the second one is usually there
+to make the first look chosen); `impact`, `confidence` and `cost` from 1 to 10 for each, **plus a
+`basis`** — a measurement or an explicitly named assumption; a `rejected_because` on everything not
+chosen; a non-empty `what_would_disprove`.
+
+**Never write the score down.** `(impact × confidence) / cost` is computed on read, and a stored one
+is refused: a copy of numbers that live three lines above it will one day disagree with them — the
+same defect class versions 1.7.0 and 1.14.0 were each spent on.
+
+**Whether a record exists for the version in flight is printed in the continuation header every
+turn.** The mechanism cannot know whether this version needed one; what it does is stop a flat
+decision from looking exactly like a considered one.
+
+## The plan re-examines itself
+
+The second measurement is blunter still: versions ever cancelled, dropped or reordered in
+`docs/ROADMAP.md` — **zero**, across twenty-five-plus releases. Either the plan was right twenty-five
+times running, or it was never checked against what had been built.
+
+Every ten turns the step instruction is **replaced** by a mandatory review: read the remaining
+versions against what the finished work has since shown, and answer what changed in the plan and
+why. Replaced, not appended — a directive at the end of a long text leaves the agent doing what it
+was already doing.
+
+Record the outcome in the same patch:
+
+```bash
+echo '{"roadmap_reviewed_at_iteration": 42,
+       "roadmap_review_note": "dropped version X: its job is done by mechanism Y, checked both acceptance lists"}' \
+  | node lib/update-state.mjs docs/STATE.md
+```
+
+A patch without a substantive note is **refused** with exit code 3. "All fine" does not pass: if the
+plan did not change, say what you examined and why it holds. A review that cannot fail is not a
+review.
+
+The threshold is `roadmap_review_every`; `null`, `0` or a negative number switch the review off
+entirely, exactly as they do for every other limit in this framework since v1.9.0.
+
+**What the mechanism does not do.** It makes you look. It cannot make you see, and that is written
+down in advance rather than discovered later: its only honest measure is whether the roadmap starts
+changing.
+
+## An acceptance criterion is closed by evidence
+
+The measurement this rule came from: versions declaring themselves released carried **forty** open
+acceptance criteria that said nothing about themselves. From the roadmap there was no way to tell a
+version that fell short of its own bar from one where somebody forgot a tick.
+
+The price of that silence is measured, not supposed. v0.9.0 carried an open criterion — "the >=80 %
+threshold for lines **and branches** is met" — and the first real audit run rediscovered exactly that
+four versions later: the coverage gate had never checked branches, and the two files that decide
+whether the loop continues and whether a dangerous command runs sat at 12.5 %. The roadmap knew.
+Nobody read it.
+
+**The rule.** A criterion of a released version is either closed or says out loud that it was not met:
+
+```markdown
+  - [x] Tests are green — **proven:** 468 checks, no failures, coverage gate run the way CI runs it
+  - [ ] **NOT DONE:** no live run under PM2 ever happened, so restart after a kill is unverified
+  - [ ] **WITHDRAWN:** this belonged to Cline, removed in v1.4.0; zero mentions remain in the code
+```
+
+The marker is a **shape, not a word**: a bold opening that ends in a colon, followed by a substantive
+reason. Deliberately no vocabulary: this module is published and a target project's roadmap may be
+written in any language. The reason goes through the same `isSubstantiveReason` used everywhere else,
+so a brush-off does not pass.
+
+A guard in `tests/smoke.sh` turns red on a silent criterion, and it is proven able to fail: green on a
+clean roadmap, red on a planted one.
+
+**What you must not do:** tick boxes to make the number zero. That is the same defect performed
+faster, and it shows in the missing evidence. Of the forty triaged, nine closed — which is how many
+had actually been verified.
 
 ## Permissions and safety
 

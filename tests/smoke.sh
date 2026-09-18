@@ -46,6 +46,27 @@ else
   ok "no .claude/ copy of SKILL.md (nothing to keep in step)"
 fi
 
+# v1.20.0: the same drift risk for the slash commands. commands/ is the framework source that
+# bootstrap installs; .claude/commands/ is the maintainer local working set and may hold personal
+# commands besides. Where a name exists in both, the two must not diverge.
+for CMD_SRC in "$FW"/commands/*.md; do
+  [ -f "$CMD_SRC" ] || continue
+  CMD_NAME="$(basename "$CMD_SRC")"
+  CMD_COPY="$FW/.claude/commands/$CMD_NAME"
+  if [ -f "$CMD_COPY" ]; then
+    cmp -s "$CMD_SRC" "$CMD_COPY" && ok "the .claude/ copy of $CMD_NAME matches commands/" || no "$CMD_NAME and its .claude/ copy have diverged"
+  else
+    ok "no .claude/ copy of $CMD_NAME (nothing to keep in step)"
+  fi
+done
+
+# And the boundary itself: a personal command must never reach the distributed set.
+if ls "$FW"/commands/devv.md "$FW"/commands/claude-logs.md >/dev/null 2>&1; then
+  no "a maintainer personal command leaked into commands/, which bootstrap installs everywhere"
+else
+  ok "commands/ carries framework commands only, not the maintainer personal set"
+fi
+
 T="$(mktemp -d)"
 # The backstop lives in core/loop-limits.mjs. Both settings files are generated from it, but
 # templates/pm2-ecosystem.json is static JSON and cannot import — so it is compared here instead.

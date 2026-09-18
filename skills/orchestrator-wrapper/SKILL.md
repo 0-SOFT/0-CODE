@@ -8,7 +8,7 @@ description: >-
   Use this skill at the start of every iteration in any project bootstrapped by
   the framework.
 origin: 0-code-autonomous-framework
-version: 1.19.0
+version: 1.20.0
 ---
 
 # orchestrator-wrapper

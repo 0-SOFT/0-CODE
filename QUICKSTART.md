@@ -25,14 +25,16 @@ opencode --version   # OpenCode (needs OPENROUTER_API_KEY)
 ## 2. Install into a project
 
 ```bash
+git clone https://github.com/0-SOFT/0-CODE.git
+
 cd my-project
-bash /path/to/0-code/bootstrap.sh
+bash /path/to/0-CODE/bootstrap.sh
 ```
 
 For OpenCode instead:
 
 ```bash
-bash /path/to/0-code/bootstrap.sh --backend opencode
+bash /path/to/0-CODE/bootstrap.sh --backend opencode
 ```
 
 Bootstrap tells you what it created. It never overwrites your `CLAUDE.md` or your hooks — it

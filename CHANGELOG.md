@@ -9,12 +9,76 @@ All notable changes to this project are documented here. The format follows
 > below records what changed and — more usefully — **what was learned**. Where a decision was later
 > reversed, the reversal is listed too: this project treats a disproven assumption as a result.
 
-**Current release: v1.19.0.** Measured on 2026-09-02, from the published tree run as a real git
+**Current release: v1.20.0.** Measured on 2026-09-18, from the published tree run as a real git
 repository: **476 tests** (5 announced as skipped there, because they exercise a tool that is
-deliberately not published), **131 smoke checks** with 6 announced as skipped, **31 source modules**
+deliberately not published), **132 smoke checks** with 6 announced as skipped, **31 source modules**
 at or above 80 % of lines, **124 files** exported with no secrets and nothing untranslated. Branch
 coverage is reported but deliberately not gated — the lowest is `hooks/ralph-loop-stop.mjs` at 12.5 %,
 which is what a module exercised only through a subprocess looks like from here.
+
+---
+
+## [v1.20.0] — 2026-09-18 — the commands reached nobody, and the tree never said where to find itself
+
+The release that made the repository publishable. Two of the three defects below were found by
+someone trying to *use* the project rather than read it, which is the only kind of finding that
+counts here.
+
+### The audit commands were distributed nowhere
+
+`/productionaudit` and `/productionauditloop` existed only in the framework's own `.claude/commands/`,
+and nothing shipped them: not the installer, not the plugin, not the publication manifest. Measured on
+a real target project running framework 1.18.1 — `core/audit-ledger.mjs` was there, all four audit
+templates were there, and the two command files were not. Everything the commands need arrived; only
+the commands did not.
+
+**The first fix was wrong, and running it is what showed that.** It copied `.claude/commands/`
+wholesale — which is the *maintainer's own working set*, and it held a personal command carrying the
+IP address of a private server. That installer would have shipped somebody's infrastructure into
+every project it touched.
+
+So the boundary was made structural rather than a list of names, exactly as it already is for the
+skill: `commands/` is the framework's source, `.claude/commands/` its local working copy. A list has
+to be remembered; a directory cannot be forgotten. A guard now holds the two copies to be identical
+where a name exists in both, and separately asserts that no personal command leaked into the
+distributed set — verified by planting a divergence and watching it turn red.
+
+The installer treats an absent `commands/` as normal rather than fatal: a published tree may
+legitimately carry none yet, and failing over an optional artefact turns a missing convenience into a
+broken install. That is what happens here — the commands are written in Russian and the published tree
+is English-only, so they stay behind the language gate until translated. The *mechanism*
+(`core/audit-ledger.mjs`) ships and works.
+
+### Nothing in the tree said where to get the tree
+
+Found while walking the publication checklist. The acceptance test for publishing reads: *a stranger
+can clone the repository and reach the first autonomous commit without once asking the author.* The
+measurement:
+
+```
+git clone / repository URL in README.md, QUICKSTART.md, GUIDELINE.md, CONTRIBUTING.md:  0
+```
+
+Every install instruction began at `bash /path/to/0-code/bootstrap.sh` — a path the reader has no way
+to obtain. The documentation described operating the thing and never described acquiring it, which is
+invisible from inside a checkout and fatal from outside one. Clone lines were added to `README.md` and
+`QUICKSTART.md`, and the placeholder path corrected to the real repository name.
+
+### Two files claimed a version that did not exist
+
+`bootstrap.sh` and `tests/smoke.sh` carried comments dated `v1.20.0` while the changelog's newest
+entry was v1.19.0 and `docs/STATE.md` reported v1.19.0 as released. The work was real and the
+bookkeeping was missing, so tagging the tree `v1.19.0` would have pointed a tag at content that
+release never contained. This entry is that bookkeeping.
+
+### Also
+
+- `LICENSE` carried a placeholder copyright holder; it now names the actual one.
+
+### Gates
+
+476 tests (471 passed, 5 announced skips), smoke 132/0/6, 31 source modules at or above 80 % of
+lines, export clean — all measured from the published tree run as a real git repository.
 
 ---
 

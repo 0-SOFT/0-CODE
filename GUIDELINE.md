@@ -1,6 +1,6 @@
 # GUIDELINE — how this works, and why it works this way
 
-> **Framework version:** v1.19.0.
+> **Framework version:** v1.20.0.
 >
 > This file is for the person who opened the repository and wants to understand **why everything
 > is shaped the way it is**. If you only want to use the framework, read [README.md](README.md).

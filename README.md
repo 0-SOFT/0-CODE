@@ -1,6 +1,6 @@
 # 0-CODE — an autonomous development loop for Claude Code and OpenCode
 
-> **Version:** v1.19.0 · MIT licence · zero runtime dependencies
+> **Version:** v1.20.0 · MIT licence · zero runtime dependencies
 
 Give an AI agent a goal and a roadmap. It plans, writes code, runs tests, commits, and keeps going
 across sessions — until the work is done, the budget runs out, or it hits something only a human
@@ -11,9 +11,11 @@ restarts, gates that decide when to stop, guards that survive the agent trying t
 a supervisor that keeps working after the network drops.
 
 ```bash
+git clone https://github.com/0-SOFT/0-CODE.git
+
 cd my-project
-bash /path/to/0-code/bootstrap.sh          # Claude Code (default)
-bash /path/to/0-code/bootstrap.sh --backend opencode   # OpenCode + any OpenRouter model
+bash /path/to/0-CODE/bootstrap.sh          # Claude Code (default)
+bash /path/to/0-CODE/bootstrap.sh --backend opencode   # OpenCode + any OpenRouter model
 claude                                     # the loop takes over from here
 ```
 
@@ -166,12 +168,20 @@ without touching your own hooks, and writes an installation marker so a second r
 (The `templates/` directory is NOT copied into the target project — templates are read from the
 framework directory.)
 
+The framework lives outside the project it drives, so get it first:
+
+```bash
+git clone https://github.com/0-SOFT/0-CODE.git
+```
+
+Then install it into your project:
+
 ```bash
 # Linux / macOS
-bash /path/to/0-code/bootstrap.sh [--backend claude|opencode]
+bash /path/to/0-CODE/bootstrap.sh [--backend claude|opencode]
 
 # Windows (PowerShell)
-pwsh C:\path\to\0-code\bootstrap.ps1
+pwsh C:\path\to\0-CODE\bootstrap.ps1
 ```
 
 Then either start `claude` in the project, or for OpenCode:

@@ -286,6 +286,40 @@ copy_with_backup \
   "$FRAMEWORK_ROOT/skills/orchestrator-wrapper/SKILL.md" \
   "$TARGET_DIR/.claude/skills/orchestrator-wrapper/SKILL.md"
 
+# --- 7b. Copy the framework's slash commands ---
+#
+# WHY THIS EXISTS (v1.20.0). The audit commands lived only in the framework's own .claude/commands/
+# and nothing distributed them: not this installer, not the plugin, not the publication manifest.
+# Measured on a real target project running framework 1.18.1 — core/audit-ledger.mjs was there, all
+# four audit templates were there, and the two command files were not, so /productionaudit simply
+# did not exist. Everything the commands need arrived; only the commands did not.
+#
+# WHY THE SOURCE IS commands/ AND NOT .claude/commands/. The first attempt copied the latter and was
+# caught by running it: `.claude/commands/` is the MAINTAINER'S OWN working set, and it held personal
+# commands — one of them carrying the IP address of a private server. Installing "every command in
+# that directory" would have shipped somebody's infrastructure into every bootstrapped project.
+#
+# So the boundary is structural rather than a list of names, exactly as it already is for the skill:
+# `skills/` is the framework's source and `.claude/skills/` its local working copy. A list would have
+# to be remembered; a directory cannot be forgotten.
+#
+# The guard around the directory is deliberate: a published tree may legitimately carry no commands
+# yet, and an installer that fails over an optional artefact turns a missing convenience into a
+# broken install.
+COMMANDS_SRC="$FRAMEWORK_ROOT/commands"
+if [ -d "$COMMANDS_SRC" ]; then
+  CMD_COUNT=0
+  for cmd in "$COMMANDS_SRC"/*.md; do
+    [ -f "$cmd" ] || continue
+    if [ "$CMD_COUNT" -eq 0 ]; then create_dir_if_missing "$TARGET_DIR/.claude/commands"; fi
+    copy_with_backup "$cmd" "$TARGET_DIR/.claude/commands/$(basename "$cmd")"
+    CMD_COUNT=$((CMD_COUNT + 1))
+  done
+  [ "$CMD_COUNT" -eq 0 ] && echo "    skip (none):         slash commands"
+else
+  echo "    skip (absent):       slash commands (not part of this tree)"
+fi
+
 # --- 8. CLAUDE.md (append-with-markers if exists) ---
 
 PROJECT_NAME="$(basename "$TARGET_DIR")"

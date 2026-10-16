@@ -9,6 +9,7 @@ import { parseToml } from '../../lib/toml-mini.mjs';
 import { resolveMcpReference } from '../../core/mcp-reference.mjs';
 import { frameworkSource } from '../helpers/framework-source.mjs';
 import { runBootstrap } from '../helpers/bootstrap-run.mjs';
+import { assertLifecycleDoctor } from '../helpers/lifecycle-doctor.mjs';
 const repo=fileURLToPath(new URL('../../',import.meta.url)),scratch=join(dirname(repo.replace(/[\\/]$/,'')),'scratch','tmp');mkdirSync(scratch,{recursive:true});
 const selection=['skills/coding-standards','agents/architect','commands/code-review','rules/common/coding-style','mcp/sentry'];
 function fixture(t,extra={}) {
@@ -69,7 +70,7 @@ test('actual CLI installs default user scope into isolated profiles and project 
   const preview=await run(['install','--config',configFile,'--dry-run']);assert.equal(preview.status,0,preview.stderr);assert.ok(!existsSync(join(f.home,'pool')));
   const started=performance.now(),installed=await run(['install','--config',configFile]);assert.equal(installed.status,0,installed.stderr);
   t.diagnostic('Actual user-scope CLI install with filesystem progress: '+Math.round(performance.now()-started)+' ms');
-  const doctor=await run(['doctor']);assert.equal(doctor.status,0,doctor.stdout+doctor.stderr);assert.equal(JSON.parse(doctor.stdout).ok,true);
+  const doctor=await run(['doctor']);assertLifecycleDoctor(JSON.parse(doctor.stdout),{cwd:project,env:f.env,engines:f.options.config.engines,status:doctor.status});
   assert.ok(!existsSync(join(project,'.0-code/toolset/skills/coding-standards/SKILL.md')));
   const repeat=await run(['install'],true);assert.equal(repeat.status,0,repeat.stderr);assert.equal(JSON.parse(repeat.stdout).changed,0);assert.equal((await run(['doctor-tools'])).status,0);
   assert.equal((await run(['uninstall'])).status,0);assert.ok(existsSync(join(f.home,'pool/.0-code/installation.json')));

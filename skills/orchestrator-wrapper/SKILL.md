@@ -27,6 +27,8 @@ Significant architectural choices need at least three viable alternatives, expli
 
 Register long-running external processes in `running_jobs`, then do independent work or end the turn. Collect finished results and clear their records; inspect dead and overdue work. Do not poll with sleeping shell loops.
 
+Use exactly one completion signal: `done_marker` is literal text in `log`, while `done_file` is a result file path, absolute or relative to the project. Truncate the log or remove the previous file before each launch; files older than `started_at` are ignored. `finished` means read the result, never assume success from existence: `ok=false` remains a failed result.
+
 Use the project's inventory and checks before bundled tools. Record genuine blockers in state; do not invent them to stop ordinary work. Iteration and spending limits are opt-in. A spending limit requires a driver that records cost. One folder has one active cycle; separate branches and folders isolate parallel cycles.
 
 The Claude Stop hook or external supervisor owns continuation. Never run both drivers for one folder. End the turn after actual work and an accurate state update.

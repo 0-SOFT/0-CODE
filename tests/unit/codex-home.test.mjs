@@ -14,7 +14,8 @@ import { PROJECT_MODULES } from '../../core/project-modules.mjs';
 const scratch = process.env.FRAMEWORK_TEST_TMPDIR || tmpdir();
 function fixture(t) {
   mkdirSync(scratch, { recursive: true });
-  const base = mkdtempSync(join(scratch, 'codex-home-test-'));
+  // Match CodexHome's identity space even when TEMP uses an 8.3 path or a substituted drive.
+  const base = realpathSync.native(mkdtempSync(join(scratch, 'codex-home-test-')));
   t.after(() => cleanupTempDir(base));
   const project = join(base, 'project'), personal = join(base, 'personal'), home = join(base, 'owned');
   mkdirSync(project); mkdirSync(personal);

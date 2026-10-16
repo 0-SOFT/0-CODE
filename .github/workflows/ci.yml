@@ -7,16 +7,21 @@ on:
 
 jobs:
   test:
-    name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    name: ${{ matrix.os }} / Node ${{ matrix.node }} / engines ${{ matrix.engines }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
         node: [20, 22, 24]
+        engines: [absent, present]
+    env:
+      ZERO_CODE_TEST_ENGINES: ${{ matrix.engines }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -25,6 +30,18 @@ jobs:
       - name: Record the runtime used by Bash and child commands
         shell: bash
         run: node -p 'JSON.stringify({version:process.version,executable:process.execPath,platform:process.platform})'
+
+      # Exact versions support Node 20 as well as Windows/Linux; only --version runs, no login.
+      - name: Install real engine CLIs in a temporary prefix
+        if: matrix.engines == 'present'
+        shell: bash
+        run: |
+          prefix="$RUNNER_TEMP/0-code-engines"
+          npm install --prefix "$prefix" --no-audit --no-fund @anthropic-ai/claude-code@2.1.80 @openai/codex@0.162.0 opencode-ai@1.19.3
+          echo "$prefix/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Verify the actual engine environment, including Windows shims
+        run: node tests/helpers/check-engines.mjs ${{ matrix.engines }}
 
       # jq is used by the session logger hook; the smoke suite checks for it.
       - name: Install jq (Linux)

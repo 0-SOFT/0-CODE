@@ -9,14 +9,30 @@ All notable changes to this project are documented here. The format follows
 > below records what changed and — more usefully — **what was learned**. Where a decision was later
 > reversed, the reversal is listed too: this project treats a disproven assumption as a result.
 
-**Current version: v2.0.2.** Validation for this version is recorded with each change; earlier runs below are historical evidence.
+**Current version: v2.0.3.** Validation for this version is recorded with each change; earlier runs below are historical evidence.
 
-This public update includes changes from **1.21.0 through 2.0.2** after the published
+This public update includes changes from **1.21.0 through 2.0.3** after the published
 1.20.0. Version 1.21.0 was prepared locally but was not published. Older sections
 record behavior and measurements at the time; current installation instructions
 are in [INTEGRATE](INTEGRATE.md) and [PROJECT_SETTINGS](docs/PROJECT_SETTINGS.md).
 Private development reports, decisions and task documents are excluded; configured
 document roles in installed projects remain part of the product.
+
+---
+
+## [v2.0.3] - 2026-10-16 - Portable lifecycle checks and complete diagnostics
+
+- PowerShell presentation cmdlets such as Format-Table remain allowed. The shared guard distinguishes their hyphenated command names from Windows format while preserving Format-Volume, other disk-denial rules and attached Windows formatting switches.
+- Known native Windows commands keep their identity when CMD accepts a slash-switch without whitespace, including nested cmd/c. Disk formatting, destructive root removal and mass taskkill controls remain denied; POSIX paths and ordinary commands retain their behavior.
+- Lifecycle tests independently run real CLI version probes and accept only the expected missing-engine checks; ownership, guard, MCP, repeat, upgrade and uninstall checks remain mandatory. CI covers Windows/Linux × Node 20/22/24 with engines absent and with exact npm CLI versions installed in a temporary prefix, without login.
+- The test runner returns through exitCode so pending stdout/stderr writes drain on success and failure. Real subprocess regressions cover large piped output, late failures, summaries, coverage success/failure and child startup errors.
+- Background jobs distinguish literal log text in done_marker from a readable result path in done_file. Invalid or ambiguous records are diagnosed, old result files are ignored, and finished never implies success. Platform path resolution preserves Windows UNC roots and POSIX backslash filenames.
+- Windows test fixtures canonicalize temporary roots before checking paths or injecting link metadata, preserving overlap, hardlink, symlink and personal-home refusal controls under short TEMP aliases.
+- PowerShell bootstrap and migration CLI checks use the shared filesystem-progress observer instead of a fixed 30-second wall-clock timeout. Real installer activity keeps the check alive; a silent child still times out. The PowerShell fixture uses isolated native profiles.
+- Local Git clone fixtures retry the exact transient Windows config-lock initialization failure at most three times. A surviving failed destination is preserved and a fresh sibling is used; receipt and lifecycle checks follow the actual successful clone. Existing destinations and unrelated errors remain failures.
+- New installation journals register exact temporary write paths for files, runtime ignores and coordinated commit markers. Recovery checks all authorized roots before cleaning known bytes, including interrupted rollback. Unknown or partial bytes and exclusive-create ownership conflicts retain the journals for owner review; links and foreign files remain protected.
+- The Codex PowerShell hook reads UTF-8 explicitly and sets no-BOM output encoding after reading stdin. Real outer-shell controls preserve Unicode JSON and structured denial while malformed input remains denied.
+- Version headers and exported job/CI documentation are aligned. Full release acceptance and publication are separate from these targeted regressions; configured CI is not execution evidence.
 
 ---
 

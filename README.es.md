@@ -2,7 +2,7 @@
 
 # 0-CODE
 
-**Versión:** v2.0.2
+**Versión:** v2.0.3
 
 Un ciclo de desarrollo autónomo para **Claude Code, Codex y OpenCode**, integrado en un proyecto existente. Una única instrucción de ciclo puede reunir investigación, implementación, correcciones, auditorías y publicación de versiones.
 

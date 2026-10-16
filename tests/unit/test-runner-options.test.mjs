@@ -17,8 +17,7 @@ const directories = {
 };
 
 function invoke(args, { status = 0, line = 100 } = {}) {
-  const calls = [], exits = [], errors = [];
-  const exit = { requested: true };
+  const calls = [], errors = [];
   const row = { file: 'core/fixture.mjs', line, branch: 100 };
   const context = {
     join,
@@ -31,11 +30,10 @@ function invoke(args, { status = 0, line = 100 } = {}) {
     process: {
       argv: ['node', 'tests/run.mjs', ...args], execPath: 'node-under-test',
       stdout: { write() {} }, stderr: { write() {} },
-      exit: code => { exits.push(code); throw exit; },
     },
   };
-  try { runInNewContext(source, context); } catch (error) { if (error !== exit) throw error; }
-  return { calls, exits, errors };
+  runInNewContext(source, context);
+  return { calls, exits: [context.process.exitCode], errors };
 }
 
 test('runner forwards an explicit process limit with every selected file and keeps native defaults otherwise', () => {

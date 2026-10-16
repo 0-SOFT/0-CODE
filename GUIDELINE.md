@@ -1,6 +1,6 @@
 # Development guide
 
-**Framework version:** v2.0.2
+**Framework version:** v2.0.3
 
 0-CODE runs a cycle described by one prompt in an existing project through Claude Code, Codex or OpenCode. Obtain the source from `https://github.com/0-SOFT/0-CODE`. Use [INTEGRATE](INTEGRATE.md) for lifecycle operations and [PROJECT_SETTINGS](docs/PROJECT_SETTINGS.md) for the single configuration contract. In an installed project, framework code lives in `.0-code/`; a source checkout keeps `core/`, `lib/`, `hooks/` and `tools/` at its own root.
 
@@ -14,7 +14,7 @@ When `session_logs` is enabled, the supervisor writes redacted attempt journals 
 
 Stages remain 0 goals, 1 planning, 2 execution, 3 audits, 4 tests. The active prompt defines scope and order. Significant decisions record three viable alternatives, grounds, rejection reasons and a falsifiable outcome. Findings are machine ledgers with explicit coverage; fixed and rejected findings need evidence. Released acceptance criteria must explain their evidence or non-completion.
 
-Update state through `.0-code/lib/update-state.mjs`. A patch moving the version, stage or prompt must include the next task; the writer produces its passport. Register background processes in `running_jobs`, inspect completed/dead/overdue results and clear collected records. One active cycle per folder; use separate branches and work folders for independent cycles.
+Update state through `.0-code/lib/update-state.mjs`. A patch moving the version, stage or prompt must include the next task; the writer produces its passport. Register background processes in `running_jobs` with exactly one completion signal: `done_marker` is literal text in the log, `done_file` is a readable result path. Truncate the log or remove the previous result file before launch; files older than `started_at` are ignored. `finished` means collect the result, and `ok=false` still means failure. Inspect completed/dead/overdue results and clear collected records. One active cycle per folder; use separate branches and work folders for independent cycles.
 
 Development checks from the source checkout:
 

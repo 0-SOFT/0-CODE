@@ -60,10 +60,12 @@ export function buildCodexHooks({ hookFile, auditFile, nodePath = process.execPa
   if (auditFile !== undefined && (typeof auditFile !== 'string' || !isAbsolute(auditFile))) throw new Error('Codex audit path must be absolute');
   const command = `${posixQuote(nodePath.replaceAll('\\', '/'))} ${posixQuote(hookFile.replaceAll('\\', '/'))}`
     + (auditFile ? ` ${posixQuote(auditFile.replaceAll('\\', '/'))}` : '');
-  // Explicit stdin forwarding and UTF-8 avoid PowerShell's default text encoding. The encoded
+  // Read UTF-8 explicitly; PowerShell 5.1 can reset $OutputEncoding when Console.In is first
+  // opened, adding a BOM to the subsequent native pipeline. Set no-BOM output AFTER that read.
+  // The encoded
   // script carries literal paths safely through either cmd.exe or PowerShell as the outer shell.
-  const script = '$OutputEncoding=[Text.UTF8Encoding]::new(); '
-    + '$hookPayload=[Console]::In.ReadToEnd(); $hookPayload | & '
+  const script = '[Console]::InputEncoding=[Text.UTF8Encoding]::new($false); '
+    + '$hookPayload=[Console]::In.ReadToEnd(); $OutputEncoding=[Text.UTF8Encoding]::new($false); $hookPayload | & '
     + `${powershellQuote(nodePath)} ${powershellQuote(hookFile)}`
     + (auditFile ? ` ${powershellQuote(auditFile)}` : '') + '; exit $LASTEXITCODE';
   // Do not search PATH or the agent's current directory for the interpreter.

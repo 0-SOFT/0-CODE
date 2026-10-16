@@ -61,6 +61,25 @@ function executableName(word) {
   return /^[A-Za-z][A-Za-z0-9_.-]*$/.test(name) ? name.toLowerCase() : null;
 }
 
+const WINDOWS_SWITCH_COMMANDS = new Set([
+  'format', 'format.com', 'diskpart', 'taskkill', 'cmd', 'powershell', 'pwsh',
+  'rd', 'rmdir', 'del', 'erase',
+]);
+
+// CMD accepts command/Q without whitespace. Inspect its executable before treating /Q
+// as a path component; preserve POSIX ./format/Q paths and the original switch text.
+function attachedWindowsSwitch(word) {
+  const value = String(word || '');
+  for (let index = value.lastIndexOf('/'); index > 0; index = value.lastIndexOf('/', index - 1)) {
+    const executable = value.slice(0, index), name = executableName(executable);
+    const isWindowsPath = executable.includes('\\') || /^[A-Za-z]:[\\/]/.test(executable);
+    if (WINDOWS_SWITCH_COMMANDS.has(name) && (!/[\\/]/.test(executable) || isWindowsPath)) {
+      return { name, arguments: value.slice(index) };
+    }
+  }
+  return null;
+}
+
 // Strip repeatable assignments and standard wrappers, and normalize an executable path.
 export function head(seg) {
   let s = String(seg || '').trim();
@@ -68,8 +87,9 @@ export function head(seg) {
     const previous = s;
     s = s.replace(/^(?:[A-Za-z_][\w]*=(?:"[^"]*"|'[^']*'|\S+)\s+)+/, '');
     const source = s;
-    const words = commandWords(s), name = executableName(words[0]?.value);
-    if (name) s = name + s.slice(words[0].end);
+    const words = commandWords(s), attached = attachedWindowsSwitch(words[0]?.value);
+    const name = attached?.name ?? executableName(words[0]?.value);
+    if (name) s = name + (attached ? ' ' + attached.arguments : '') + s.slice(words[0].end);
     s = s.replace(/^(?:nohup|time|stdbuf(?:\s+-\S+)*|nice(?:\s+-n\s+-?\d+)?|ionice(?:\s+-\S+)*|timeout\s+\S+)\s+/i, '');
     s = s.replace(/^sudo\s+(?:-\S+\s+)*/i, '');
     if (name === 'command' || name === 'exec' || name === 'builtin') {
@@ -135,10 +155,13 @@ function shellCommand(seg) {
     if (['bash', 'sh', 'zsh', 'dash', 'ksh'].includes(name) && /^-[A-Za-z]*c[A-Za-z]*$/.test(option)) {
       return words[i + 1]?.value ?? null;
     }
-    if (name === 'cmd' && /^\/[ck]$/i.test(option)) {
-      const script = words[i + 1];
+    if (name === 'cmd' && /^\/[ck]/i.test(option)) {
+      // CMD also accepts /cecho and /c"echo ...". Read the original tail so quotes
+      // around data survive while an outer quote around the script is unwrapped.
+      const tail = seg.slice(words[i].start + 2);
+      const script = commandWords(tail)[0];
       if (!script) return null;
-      return script.value + seg.slice(script.end);
+      return script.value + tail.slice(script.end);
     }
   }
   return null;
@@ -205,7 +228,9 @@ export function segmentVerdict(rawSeg, { advisory = false } = {}) {
   // 2. Formatting and wiping disks — irreversible whatever the target.
   // The standalone Windows help query only prints usage; it has no volume target.
   if (/^format(?:\.com)?\s+\/\?\s*$/i.test(seg)) return null;
-  if (/^(?:format-volume|clear-disk|format|mkfs(?:\.\w+)?|diskpart)\b/i.test(seg))
+  // A hyphen belongs to a PowerShell cmdlet name: Format-Table is not Windows format.
+  // Keep Format-Volume explicit and retain attached Windows switches such as format.com/Q.
+  if (/^(?:format-volume|clear-disk|format(?!-)|mkfs(?:\.\w+)?|diskpart)\b/i.test(seg))
     return { level: HARD, reason: 'formatting or wiping a disk' };
   // 2b. v1.25.0: writing raw bytes over a whole block device wipes it just as surely as formatting,
   //     and `dd of=/dev/sda` was allowed. Reading FROM a disk (`if=/dev/sda`) and writing to an image

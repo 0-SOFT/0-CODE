@@ -104,6 +104,58 @@ test('the standalone Windows format help query stays allowed, an actual format s
   }
 });
 
+test('PowerShell presentation cmdlets remain allowed through all three guard APIs', () => {
+  const opencode = new OpenCodeBackend();
+  const script = 'Get-ChildItem . | Format-Table -AutoSize';
+  for (const command of [script, 'Format-Table -AutoSize', 'Format-List *',
+    'Format-Wide -Column 2', 'Format-Custom', `powershell -NoProfile -Command "${script}"`,
+    `pwsh -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`]) {
+    const event = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } };
+    assert.equal(destructiveVerdict(command), null, command);
+    assert.equal(decidePermission(event, { mode: 'arbiter' }).hookSpecificOutput.permissionDecision, 'allow', command);
+    assert.equal(evaluateCodexHook(JSON.stringify(event), decidePermission), null, command);
+    assert.equal(opencode.guardCommand(command), null, command);
+  }
+});
+
+test('presentation cmdlets never hide real disk formatting or attached Windows switches', () => {
+  const opencode = new OpenCodeBackend();
+  for (const command of ['format Z:', 'format.com/Q Z:', 'format.exe/Q Z:', 'FORMAT/V:FIXTURE Z:',
+    'Format-Volume -DriveLetter Z', 'Clear-Disk -Number 99', 'mkfs.ext4 /dev/fixture', 'diskpart',
+    'Get-ChildItem . | Format-Table; Format-Volume -DriveLetter Z',
+    'powershell -NoProfile -Command "Format-Volume -DriveLetter Z"', 'cmd /c "format.com/Q Z:"']) {
+    const event = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } };
+    assert.equal(destructiveVerdict(command)?.level, HARD, command);
+    assert.equal(decidePermission(event, { mode: 'arbiter' }).hookSpecificOutput.permissionDecision, 'deny', command);
+    assert.equal(evaluateCodexHook(JSON.stringify(event), decidePermission)?.hookSpecificOutput.permissionDecision, 'deny', command);
+    assert.ok(opencode.guardCommand(command), command);
+  }
+});
+
+test('attached native Windows switches preserve known command identity across all guards', () => {
+  const opencode = new OpenCodeBackend();
+  for (const command of ['diskpart/s fixture.txt', 'taskkill/F /IM node.exe',
+    'rd/s /q C:\\', 'del/f /s /q C:\\*', 'cmd/c "format.com/Q Z:"',
+    'C:/Windows/System32/format.com/Q Z:', '.\\format.com/Q Z:',
+    '"C:\\Windows\\System32\\format.com/Q" Z:', '\\Windows\\System32\\format.com/Q Z:',
+    'tools\\format.com/Q Z:', '\\\\server\\share\\format.com/Q Z:',
+    '\\\\?\\C:\\Windows\\System32\\format.com/Q Z:',
+    'cmd/cformat Z:', 'cmd/c"format Z:"', 'cmd /cformat Z:',
+    'cmd/kformat Z:', 'cmd /d /s /c"format Z:"']) {
+    const event = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } };
+    assert.equal(destructiveVerdict(command)?.level, HARD, command);
+    assert.equal(decidePermission(event, { mode: 'arbiter' }).hookSpecificOutput.permissionDecision, 'deny', command);
+    assert.equal(evaluateCodexHook(JSON.stringify(event), decidePermission)?.hookSpecificOutput.permissionDecision, 'deny', command);
+    assert.ok(opencode.guardCommand(command), command);
+  }
+  for (const command of ['format.com/?', 'cmd/c "format /?"', 'cmd/c "echo fixture"',
+    './format/Q fixture', '/tmp/format/Q fixture', 'C:/tools/ordinary.exe/Q fixture',
+    'cmd/cecho "format Z:"', 'cmd/c"echo format Z:"', 'cmd /cecho "format Z:"',
+    'cmd/kecho "format Z:"', 'cmd /d /s /c"echo format Z:"']) {
+    assert.equal(destructiveVerdict(command), null, command);
+  }
+});
+
 test('blocked: formatting and wiping disks', () => {
   for (const cmd of ['Format-Volume -DriveLetter C', 'Clear-Disk -Number 0',
     'mkfs.ext4 /dev/sda1', 'diskpart']) {

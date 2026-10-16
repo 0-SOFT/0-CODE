@@ -80,6 +80,8 @@ test('a real writer killed during cross-root installation restores both scopes; 
       child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('close',code=>{clearTimeout(timer);assert.notEqual(code,0,stderr);resolve();});});
   }finally {watchers.forEach(watcher=>watcher.close());if(child?.exitCode===null)child.kill('SIGKILL');}
   assert.equal(stopped,true);assert.equal(existsSync(join(project,GROUP_JOURNAL)),true);
+  assert.equal(roots.filter(root=>existsSync(join(root,'checkpoint'))).length,1);
+  for(const root of roots)assert.equal(existsSync(join(root,'pending')),false);
   assert.throws(()=>recoverInstallation(project),/authorized profile roots/);
   assert.throws(()=>applyInstallationPlan(plan(profile,'unrelated','new')),/authorized profile roots/);
   assert.throws(()=>recoverInstallationGroup(project,[project]),/exact authorized/);

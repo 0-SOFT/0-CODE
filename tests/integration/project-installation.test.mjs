@@ -6,10 +6,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { fileSnapshot } from '../../core/installation-transaction.mjs';
 import { doctorProject } from '../../core/project-doctor.mjs';
+import { assertLifecycleDoctor } from '../helpers/lifecycle-doctor.mjs';
 import { scanProject } from '../../core/project-inventory.mjs';
 import { installProject, planProjectInstallation, readInstallationReceipt, uninstallProject, upgradeProject } from '../../core/project-installation.mjs';
 import { PROJECT_MODULES } from '../../core/project-modules.mjs';
 import { cleanupTempDir } from '../helpers/index.mjs';
+import { cloneFixtureRepository } from '../helpers/git-fixture.mjs';
 const repository=fileURLToPath(new URL('../../',import.meta.url));
 const scratch=join(dirname(repository.replace(/[\\/]$/,'')),'scratch','tmp');mkdirSync(scratch,{recursive:true});
 const configuration=(extra={})=>({engines:['claude','codex','opencode'],language:'ru',
@@ -31,13 +33,16 @@ function projectFiles(root) {
   }visit(root);return [...map].sort(([a],[b])=>a.localeCompare(b));
 }
 test('git clones preserve all namespace receipt bytes despite autocrlf',t=>{
-  const area=fixture(t),root=join(area,'source'),clone=join(area,'clone');mkdirSync(root);
+  const area=fixture(t),root=join(area,'source');mkdirSync(root);
   const attributes='*.mjs filter=owner text eol=crlf\n';writeFileSync(join(root,'.gitattributes'),attributes);
   installProject(root,{config:configuration()});
   const git=(cwd,args)=>{const result=spawnSync('git',args,{cwd,encoding:'utf8',windowsHide:true});assert.equal(result.status,0,result.stderr);return result.stdout;};
   git(root,['init']);git(root,['config','user.name','Verification']);git(root,['config','user.email','verification@invalid.local']);git(root,['config','filter.owner.clean','sed s/^/OWNER:/']);
   git(root,['add','.']);git(root,['commit','-m','Installed namespace']);
-  git(area,['-c','core.autocrlf=true','clone',root,clone]);
+  const cloned=cloneFixtureRepository(root,join(area,'clone'),{cwd:area,onRetry:retry=>t.diagnostic('Transient Git clone config-lock retry '+JSON.stringify(retry)),
+    onAttempt:attempt=>{if(attempt.status!==0)t.diagnostic('Native Git clone failure '+JSON.stringify(attempt));}});
+  assert.equal(cloned.status,0,cloned.stderr);
+  const clone=cloned.destination;
   for(const entry of readInstallationReceipt(clone).files.filter(entry=>entry.path.startsWith('.0-code/')))
     assert.equal(fileSnapshot(clone,entry.path).hash,entry.hash,entry.path);
   assert.equal(readFileSync(join(root,'.gitattributes'),'utf8'),attributes);
@@ -81,7 +86,10 @@ test('native ownership survives a Git clone without private backups and preserve
   assert.equal(git(root,['ls-files','.0-code/run']).trim(),'');
   assert.equal(readFileSync(join(root,'.0-code/installation.json'),'utf8').includes('private-fixture'),false);
   for(const action of ['uninstall','upgrade']) {
-    const clone=join(area,action);git(area,['-c','core.autocrlf=true','clone',root,clone]);
+    const cloned=cloneFixtureRepository(root,join(area,action),{cwd:area,onRetry:retry=>t.diagnostic('Transient Git clone config-lock retry '+JSON.stringify(retry)),
+      onAttempt:attempt=>{if(attempt.status!==0)t.diagnostic('Native Git clone failure '+JSON.stringify(attempt));}});
+    assert.equal(cloned.status,0,cloned.stderr);
+    const clone=cloned.destination;
     assert.equal(existsSync(join(clone,'.0-code/run/backups')),false);
     if(action==='upgrade') {
       const settings=JSON.parse(readFileSync(join(clone,'.claude/settings.json'),'utf8'));settings.env.LOCAL='later owner value';settings.newField=42;
@@ -172,7 +180,7 @@ for(const item of matrix)test('lifecycle matrix: '+item.name,t=>{
   const scan=scanProject(root);assert.ok(scan.inventory);assert.equal(existsSync(join(root,'.0-code')),false);
   if(item.name.startsWith('JS')){assert.ok(scan.inventory.tools.some(tool=>tool.kind==='mcp'));assert.ok(scan.inventory.checks.length>0);assert.equal(scan.conflicts.length,0);}
   const config=configuration(item.config),installed=installProject(root,{config});assert.ok(installed.result.changed>0);
-  const doctor=doctorProject(root);assert.equal(doctor.ok,true,JSON.stringify(doctor.checks.filter(check=>!check.ok)));
+  const doctor=doctorProject(root);const probes=assertLifecycleDoctor(doctor,{cwd:root,engines:config.engines});
   assert.equal(installProject(root).result.changed,0);assert.equal(upgradeProject(root).result.changed,0);
   uninstallProject(root);assert.equal(existsSync(join(root,'.0-code')),false);
   for(const [path,bytes] of before)assert.deepEqual(readFileSync(join(root,path)),bytes,path);
@@ -180,5 +188,5 @@ for(const item of matrix)test('lifecycle matrix: '+item.name,t=>{
   for(const path of before.keys())remaining.delete(path);
   const state=config.documents?.state?.path||'docs/STATE.md',roadmap=config.documents?.roadmap?.path||'docs/ROADMAP.md';
   remaining.delete(state);remaining.delete(roadmap);assert.equal(remaining.size,0,JSON.stringify([...remaining.keys()]));
-  t.diagnostic(JSON.stringify({case:item.name,doctor:true,engines:doctor.checks.filter(check=>check.id.startsWith('engine-')).map(check=>check.id.slice(7)),repeat_changed:0,upgrade_changed:0,owner_files:before.size,owner_bytes_preserved:true}));
+  t.diagnostic(JSON.stringify({case:item.name,doctor:doctor.ok,engines:probes,repeat_changed:0,upgrade_changed:0,owner_files:before.size,owner_bytes_preserved:true}));
 });

@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,11 +9,13 @@ import {runBootstrap} from '../helpers/bootstrap-run.mjs';
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const scratch = join(dirname(repo.replace(/[\\/]$/, '')), 'scratch', 'tmp'); mkdirSync(scratch, { recursive: true });
 function fixture(t) { const root = mkdtempSync(join(scratch, 'bootstrap-cli-')); t.after(() => cleanupTempDir(root)); return root; }
-async function install(root, extraEnv = {}, args = []) {
+function isolatedEnv(root, extraEnv = {}) {
   const home=join(root,'isolated-home');
-  return runBootstrap('bash', [join(repo, 'bootstrap.sh'), root, ...args],
-    {env:{...process.env,HOME:home,USERPROFILE:home,
-      CLAUDE_CONFIG_DIR:join(home,'claude'),CODEX_HOME:join(home,'codex'),XDG_CONFIG_HOME:join(home,'xdg'),ZERO_CODE_USER_DIR:join(home,'pool'),...extraEnv}});
+  return {...process.env,HOME:home,USERPROFILE:home,
+    CLAUDE_CONFIG_DIR:join(home,'claude'),CODEX_HOME:join(home,'codex'),XDG_CONFIG_HOME:join(home,'xdg'),ZERO_CODE_USER_DIR:join(home,'pool'),...extraEnv};
+}
+async function install(root, extraEnv = {}, args = []) {
+  return runBootstrap('bash', [join(repo, 'bootstrap.sh'), root, ...args],{env:isolatedEnv(root,extraEnv)});
 }
 test('default bootstrap completes through Node, repeats without writes and never claims the cycle is already active', async t => {
   const root = fixture(t), started=performance.now(),first = await install(root, { CLAUDECODE: '1' });
@@ -42,12 +43,12 @@ test('ordinary source folders are preserved and a foreign Stop fails before writ
   assert.deepEqual(readdirSync(root).sort(), before); assert.equal(readFileSync(join(root, 'lib/yaml-mini.mjs'), 'utf8'), 'project module');
   assert.equal(readFileSync(join(root, '.claude/settings.json'), 'utf8'), settings);
 });
-test('PowerShell and Bash entrypoints install the same core contract on Windows', t => {
+test('PowerShell and Bash entrypoints install the same core contract on Windows', async t => {
   if (process.platform !== 'win32') { assert.match(readFileSync(join(repo, 'bootstrap.ps1'), 'utf8'), /tools\/0code.mjs/); return; }
   const root = fixture(t), config = join(root, 'settings.json');
   writeFileSync(config, JSON.stringify({ engines: ['claude'], modules: Object.fromEntries(Object.keys(PROJECT_MODULES).map(id => [id, false])) }));
-  const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(repo, 'bootstrap.ps1'), root, '--config', config, '--json'],
-    { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+  const result = await runBootstrap('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(repo, 'bootstrap.ps1'), root, '--config', config, '--json'],
+    {cwd:root,env:isolatedEnv(root)});
   assert.equal(result.status, 0, result.stderr); assert.ok(JSON.parse(result.stdout).changed > 0);
   assert.equal(existsSync(join(root, '.0-code/core/supervisor.mjs')), true);
 });

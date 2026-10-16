@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,7 @@ const scratch = process.env.FRAMEWORK_TEST_TMPDIR || tmpdir();
 const stream = readFileSync(new URL('../fixtures/codex/0.160.1-ok.jsonl', import.meta.url), 'utf8');
 function fixture(t) {
   mkdirSync(scratch, { recursive: true });
-  const root = mkdtempSync(join(scratch, 'codex-provision-test-'));
+  const root = realpathSync.native(mkdtempSync(join(scratch, 'codex-provision-test-')));
   t.after(() => cleanupTempDir(root));
   const targetDir = join(root, 'project'), personal = join(root, 'personal'), config = join(root, 'config'), homeDir = join(root, 'owned');
   for (const path of [targetDir, personal, config]) mkdirSync(path);

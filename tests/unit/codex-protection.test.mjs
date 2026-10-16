@@ -215,9 +215,10 @@ test('structured denial survives the complete native outer shell without relying
   const bin = process.platform === 'win32' ? windows[1] || windows[2] : '/bin/sh';
   // Exercise Codex's outer shell, rather than only the encoded inner shell.
   const args = process.platform === 'win32'
-    ? ['-NoProfile', '-NonInteractive', '-Command', handler.commandWindows] : ['-c', handler.command];
+    ? ['-NoProfile', '-NonInteractive', '-Command', '[Console]::InputEncoding=[Text.UTF8Encoding]::new($true); ' + handler.commandWindows] : ['-c', handler.command];
   const child = spawnSync(bin, args, { cwd: f.project, input: event('git push --force owned-trap'), encoding: 'utf8', timeout: 10000 });
   assert.equal(child.status, 0, child.stderr); assert.ok(denied(JSON.parse(child.stdout)));
+  assert.doesNotMatch(child.stdout, /not valid JSON/);
   const allowed = spawnSync(bin, args, { cwd: f.project, input: event('git status'), encoding: 'utf8', timeout: 10000 });
   assert.equal(allowed.status, 0, allowed.stderr); assert.equal(allowed.stdout, '');
   const malformed = spawnSync(bin, args, { cwd: f.project, input: '{', encoding: 'utf8', timeout: 10000 });
@@ -239,4 +240,25 @@ test('structured denial survives the complete native outer shell without relying
   const missing = spawnSync(bin, args, { cwd: f.project, input: event('git status'), encoding: 'utf8', timeout: 10000 });
   assert.equal(missing.status, 0, missing.stderr); assert.ok(denied(JSON.parse(missing.stdout)));
   assert.deepEqual(readdirSync(f.project), []);
+});
+
+test('Windows outer PowerShell preserves UTF-8 JSON without adding a BOM in either inherited encoding', { skip: process.platform !== 'win32' }, t => {
+  const f = fixture(t), capture = join(f.base, 'capture-input.mjs');
+  writeFileSync(capture, "import {readFileSync} from 'node:fs'; const bytes=readFileSync(0); console.log(JSON.stringify({hex:bytes.toString('hex'),text:bytes.toString('utf8')}));\n");
+  const handler = buildCodexHooks({ hookFile: capture }).hooks.PreToolUse[0].hooks[0];
+  const windows = /^(?:"([^"]+)"|(\S+)) (.+)$/.exec(handler.commandWindows);
+  const bin = windows[1] || windows[2];
+  const version = spawnSync(bin, ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString(); [Console]::InputEncoding.WebName'], { encoding: 'utf8', windowsHide: true });
+  assert.equal(version.status, 0); t.diagnostic(version.stdout.trim());
+  const input = event('git status # \u0434\u043e\u043c \u2014 \ud83d\ude00');
+  for (const prefix of ['', '[Console]::InputEncoding=[Text.UTF8Encoding]::new($true); ']) {
+    const child = spawnSync(bin, ['-NoProfile', '-NonInteractive', '-Command', prefix + handler.commandWindows], {
+      cwd: f.project, input, encoding: 'utf8', windowsHide: true, timeout: 10000,
+    });
+    assert.equal(child.status, 0, child.stderr);
+    const received = JSON.parse(child.stdout);
+    assert.ok(received.hex.startsWith('7b'), received.hex);
+    assert.equal(received.text.trim(), input);
+    assert.deepEqual(JSON.parse(received.text), JSON.parse(input));
+  }
 });

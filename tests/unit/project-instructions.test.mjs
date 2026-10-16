@@ -1,7 +1,7 @@
 // Preserve project-owned instructions while refreshing the framework block.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { cleanupTempDir } from '../helpers/index.mjs';
@@ -11,7 +11,7 @@ import { CodexHome } from '../../core/backends/codex-home.mjs';
 import { CodexBackend } from '../../core/backends/codex.mjs';
 
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), 'instructions-'));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'instructions-')));
   t.after(() => cleanupTempDir(root));
   for (const dir of ['templates', 'config']) mkdirSync(join(root, dir));
   writeFileSync(join(root, 'templates', 'project-CLAUDE.md'), '# __PROJECT_NAME__\nVersion __FRAMEWORK_VERSION__\n');

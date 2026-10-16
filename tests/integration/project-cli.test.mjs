@@ -8,6 +8,7 @@ import { PROJECT_MODULES } from '../../core/project-modules.mjs';
 import { cleanupTempDir, readFrontmatter } from '../helpers/index.mjs';
 import { checkFreshness } from '../../lib/step-instruction.mjs';
 import {runBootstrap} from '../helpers/bootstrap-run.mjs';
+import { assertLifecycleDoctor } from '../helpers/lifecycle-doctor.mjs';
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const scratch = join(dirname(repo.replace(/[\\/]$/, '')), 'scratch', 'tmp'); mkdirSync(scratch, { recursive: true });
 const cli = join(repo, 'tools/0code.mjs');
@@ -40,8 +41,9 @@ test('actual CLI core lifecycle: read-only preview, install, native doctor contr
   const preview = await run(root, ['install', '--config', file, '--dry-run']); assert.equal(preview.status, 0, preview.stderr);
   assert.deepEqual(readdirSync(root).sort(), before);
   const installed = await run(root, ['install', '--config', file]); assert.equal(installed.status, 0, installed.stderr);
-  const doctor = await run(root, ['doctor'], true); assert.equal(doctor.status, 0, doctor.stderr + doctor.stdout);
-  const result = JSON.parse(doctor.stdout); assert.equal(result.ok, true);
+  const doctor = await run(root, ['doctor'], true);
+  const result = JSON.parse(doctor.stdout);
+  assertLifecycleDoctor(result, { cwd: root, engines: ['claude', 'codex', 'opencode'], status: doctor.status });
   assert.equal(result.checks.filter(check => /^guard-/.test(check.id) && check.ok).length, 3);
   for (const command of ['install', 'upgrade']) {
     const repeated = await run(root, [command], true); assert.equal(repeated.status, 0, repeated.stderr);

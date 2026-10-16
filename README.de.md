@@ -2,7 +2,7 @@
 
 # 0-CODE
 
-**Version:** v2.0.2
+**Version:** v2.0.3
 
 Ein autonomer Entwicklungszyklus für **Claude Code, Codex und OpenCode**, eingebunden in ein bestehendes Projekt. Eine einzige Zyklusanweisung kann Recherche, Umsetzung, Fehlerbehebung, Audits und Veröffentlichung umfassen.
 

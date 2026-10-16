@@ -9,9 +9,11 @@ import { installProject as install, upgradeProject as upgrade, uninstallProject 
 import { scanProject } from '../../core/project-inventory.mjs';
 import { PROJECT_MODULES } from '../../core/project-modules.mjs';
 import { doctorProject } from '../../core/project-doctor.mjs';
+import { assertLifecycleDoctor } from '../helpers/lifecycle-doctor.mjs';
 import { cleanupTempDir } from '../helpers/index.mjs';
 import { writeMemory } from '../../core/turn-progress.mjs';
 import { frameworkSource } from '../helpers/framework-source.mjs';
+import { runBootstrap } from '../helpers/bootstrap-run.mjs';
 const repo=fileURLToPath(new URL('../../',import.meta.url)),scratch=join(dirname(repo.replace(/[\\/]$/,'')),'scratch','tmp');mkdirSync(scratch,{recursive:true});
 const config={engines:['claude'],modules:Object.fromEntries(Object.keys(PROJECT_MODULES).map(id=>[id,false]))};
 const sources=new Map();
@@ -43,7 +45,7 @@ function all(root) {const rows=[];function visit(dir,path=''){for(const e of rea
 test('available ownership evidence authorizes an atomic migration; owner code/docs remain exact and repeat changes zero',t=>{
   const f=legacy(t),before=all(f.root),plan=planProjectMigration(f.root,{config});assert.deepEqual(all(f.root),before);
   assert.ok(plan.migration.removed.some(x=>x.path==='core/gates.mjs'));assert.ok(plan.migration.preserved.some(x=>x.path==='lib/yaml-mini.mjs'));
-  const migrated=migrateProject(f.root,{config});assert.ok(migrated.result.changed>0);assert.equal(doctorProject(f.root).ok,true);
+  const migrated=migrateProject(f.root,{config});assert.ok(migrated.result.changed>0);assertLifecycleDoctor(doctorProject(f.root),{cwd:f.root,engines:config.engines});
   for(const path of ['core/owner.py','lib/yaml-mini.mjs','docs/STATE.md','docs/ROADMAP.md','docs/adr/design.md'])assert.equal(readFileSync(join(f.root,path)).toString('base64'),before.find(([p])=>p===path)[1]);
   assert.equal(existsSync(join(f.root,'core/gates.mjs')),false);
   const receipt=JSON.parse(readFileSync(join(f.root,'.0-code/installation.json')));for(const item of receipt.migration.backups)assert.equal(readFileSync(join(f.root,item.backup)).toString('base64'),before.find(([p])=>p===item.path)[1]);
@@ -71,24 +73,24 @@ test('changed instruction block, foreign Stop, ambiguous markers and unproved in
   const root=mkdtempSync(join(scratch,'not-legacy-'));t.after(()=>cleanupTempDir(root));
   assert.throws(()=>migrateProject(root,{source:frameworkSource(t).source,config}),/No proved/);assert.deepEqual(all(root),[]);
 });
-test('actual migrate CLI previews all removals and backs up before conversion',t=>{
+test('actual migrate CLI previews all removals and backs up before conversion',async t=>{
   const f=legacy(t),settings=join(f.root,'selected.json');writeFileSync(settings,JSON.stringify(config));
-  const before=all(f.root),run=args=>spawnSync(process.execPath,[join(repo,'tools/0code.mjs'),'migrate','--project',f.root,'--config',settings,'--source',f.source,'--json',...args],{encoding:'utf8',windowsHide:true,timeout:30000});
-  const preview=run(['--dry-run']);assert.equal(preview.status,0,preview.stderr);assert.deepEqual(all(f.root),before);assert.ok(JSON.parse(preview.stdout).migration.removed.length>0);
-  const result=run([]);assert.equal(result.status,0,result.stderr);assert.equal(doctorProject(f.root).ok,true);
+  const before=all(f.root),run=args=>runBootstrap(process.execPath,[join(repo,'tools/0code.mjs'),'migrate','--project',f.root,'--config',settings,'--source',f.source,'--json',...args]);
+  const preview=await run(['--dry-run']);assert.equal(preview.status,0,preview.stderr);assert.deepEqual(all(f.root),before);assert.ok(JSON.parse(preview.stdout).migration.removed.length>0);
+  const result=await run([]);assert.equal(result.status,0,result.stderr);assertLifecycleDoctor(doctorProject(f.root),{cwd:f.root,engines:config.engines});
 });
 
 test('lifecycle matrix: available legacy evidence with all three engines',t=>{
   const f=legacy(t),before=all(f.root),scan=scanProject(f.root);assert.ok(scan.inventory);
   const selection={...config,engines:['claude','codex','opencode']};migrateProject(f.root,{config:selection});
-  const doctor=doctorProject(f.root);assert.equal(doctor.ok,true,JSON.stringify(doctor.checks.filter(check=>!check.ok)));
+  const doctor=doctorProject(f.root);const probes=assertLifecycleDoctor(doctor,{cwd:f.root,engines:selection.engines});
   assert.equal(installProject(f.root).result.changed,0);assert.equal(upgradeProject(f.root).result.changed,0);
   uninstallProject(f.root);
   for(const path of ['core/owner.py','lib/yaml-mini.mjs','docs/STATE.md','docs/ROADMAP.md','docs/adr/design.md'])
     assert.equal(readFileSync(join(f.root,path)).toString('base64'),before.find(([p])=>p===path)[1],path);
   assert.equal(readFileSync(join(f.root,'CLAUDE.md'),'utf8'),f.prefix+f.suffix);
   assert.doesNotMatch(readFileSync(join(f.root,'.claude/settings.json'),'utf8'),/run-hook/);
-  t.diagnostic(JSON.stringify({case:f.source===repo?'published 1.30':'synthetic legacy',doctor:true,engines:selection.engines,repeat_changed:0,upgrade_changed:0,owner_bytes_preserved:true}));
+  t.diagnostic(JSON.stringify({case:f.source===repo?'published 1.30':'synthetic legacy',doctor:doctor.ok,engines:probes,repeat_changed:0,upgrade_changed:0,owner_bytes_preserved:true}));
 });
 test('missing ownership evidence refuses migration before changing the project',t=>{
   const f=legacy(t,{syntheticOnly:true}),before=all(f.root);unlinkSync(join(f.source,'config/legacy-installations.json'));

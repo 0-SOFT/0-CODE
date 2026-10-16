@@ -47,6 +47,9 @@ function validateGroup(group,scopes,primary) {
       throw new Error('Invalid coordinated recovery entry');
   }
   if(seen.size!==scopes.length)throw new Error('Coordinated recovery requires the exact authorized roots');
+  const leg=group.scopes.find(leg=>leg.id===group.primary);
+  io.validateStaging(primary,group.commitStaging,GROUP_JOURNAL,[...leg.changes.map(entry=>entry.path),
+    ...io.journalStaging(leg).map(entry=>entry.path),io.JOURNAL,GROUP_JOURNAL,io.RUN_IGNORE,'.0-code/run/installation.lock']);
   return group;
 }
 function lockAll(scopes) {
@@ -61,14 +64,17 @@ function assertKnown(group,scopes) {
   const byId=new Map(scopes.map(scope=>[scope.id,scope.root]));
   for(const leg of group.scopes) {
     const root=byId.get(leg.id);
+    io.assertNoStagingConflict(root);
     const ignore=fileSnapshot(root,io.RUN_IGNORE).bytes;
     if(ignore!==null&&!ignore.equals(Buffer.from('*\n')))throw new Error('Coordinated runtime ignore changed');
+    io.assertJournalStaging(root,leg);
     for(const entry of leg.changes) {
       const current=fileSnapshot(root,entry.path).hash;
       if(group.phase==='committed'?current!==entry.afterHash:current!==entry.beforeHash&&current!==entry.afterHash)
         throw new Error('Coordinated recovery intersects a changed file: '+entry.path);
     }
   }
+  io.assertStaging(byId.get(group.primary),group.commitStaging,[hashBytes(bytes({...group,phase:'committed'}))]);
 }
 function clearMarkers(group,scopes,primary) {
   inspectMarkers(scopes,group,{allowMissing:true});
@@ -78,7 +84,9 @@ function clearMarkers(group,scopes,primary) {
 }
 function restore(group,scopes,primary) {
   assertKnown(group,scopes);const byId=new Map(scopes.map(scope=>[scope.id,scope.root]));
-  if(group.phase==='applying')for(const leg of [...group.scopes].reverse())io.restoreJournal(byId.get(leg.id),leg);
+  io.clearStaging(primary,group.commitStaging,[hashBytes(bytes({...group,phase:'committed'}))]);
+  if(group.phase==='applying')for(const leg of [...group.scopes].reverse())io.restoreJournal(byId.get(leg.id),leg,{journalPath:GROUP_JOURNAL});
+  if(group.phase==='committed')for(const leg of group.scopes)io.clearJournalStaging(byId.get(leg.id),leg);
   if(group.phase==='applying')for(const leg of group.scopes)if(leg.runtimeIgnoreCreated) {
     const path=io.contained(byId.get(leg.id),io.RUN_IGNORE);if(existsSync(path))unlinkSync(path);
   }
@@ -89,6 +97,7 @@ function restore(group,scopes,primary) {
 }
 export function recoverInstallationGroup(primary,roots) {
   primary=resolve(primary);const scopes=scopesFor(roots);
+  for(const scope of scopes)io.assertNoStagingConflict(scope.root);
   if(!scopes.some(scope=>scope.id===rootId(primary)))throw new Error('Primary root is not an authorized capability');
   const data=fileSnapshot(primary,GROUP_JOURNAL).bytes;
   if(data===null) {
@@ -115,36 +124,46 @@ export function applyInstallationGroup(plans,{primary=plans[0]?.root,removeRunti
       throw new Error('Recover unfinished installation before coordinating roots');
   }
   const count=plans.reduce((sum,plan)=>sum+plan.changes.length,0);if(!count)return {changed:0};
-  const group={schema_version:2,id:randomUUID(),primary:rootId(primary),phase:'applying',scopes:scopes.map(scope=>{
+  const group={schema_version:2,id:randomUUID(),primary:rootId(primary),phase:'applying',commitStaging:io.stagingPath(GROUP_JOURNAL),scopes:scopes.map(scope=>{
     const ignore=fileSnapshot(scope.root,io.RUN_IGNORE).bytes;
     if(ignore!==null&&!ignore.equals(Buffer.from('*\n')))throw new Error('Coordinated runtime ignore intersects existing data');
     const plan=byId.get(scope.id);
     return {id:scope.id,missingDirectories:io.missingDirectories(scope.root,plan.changes),runtimeIgnoreCreated:ignore===null,
+      ...(ignore===null?{runtimeIgnoreStaging:io.stagingPath(io.RUN_IGNORE)}:{}),
       ...(removeRuntimeIgnores.some(root=>rootId(root)===scope.id)?{removeRuntimeIgnore:true}:{}),
-      changes:plan.changes.map(entry=>({path:entry.path,before:entry.before===null?null:entry.before.toString('base64'),
+      changes:plan.changes.map(entry=>({path:entry.path,staging:io.stagingPath(entry.path),before:entry.before===null?null:entry.before.toString('base64'),
         beforeHash:entry.beforeHash,beforeMode:entry.beforeMode,afterHash:entry.afterHash}))};
   })};
   let unlock;
   try {unlock=lockAll(scopes);}catch(error){for(const leg of group.scopes)io.removeEmpty(scopes.find(scope=>scope.id===leg.id).root,leg.missingDirectories);throw error;}
-  let journalWritten=false,complete=false;
+  let journalWritten=false,complete=false,retainLocks=false;
   try {
     for(const scope of scopes)byId.get(scope.id).assertReady();
+    validateGroup(group,scopes,primary);
+    for(const leg of group.scopes)io.assertJournalStaging(scopes.find(scope=>scope.id===leg.id).root,leg,{unused:true});
+    if(fileSnapshot(primary,group.commitStaging).hash!==null)throw new Error('Installation commit staging already exists');
     // Persist all before-images before the first application file changes. Primary disappears last.
     writeFileSync(io.contained(primary,GROUP_JOURNAL),bytes(group),{flag:'wx',mode:0o600});journalWritten=true;
     for(const scope of scopes) {
       if(scope.id!==group.primary)writeFileSync(io.contained(scope.root,GROUP_JOURNAL),bytes({schema_version:2,id:group.id,primary:group.primary}),{flag:'wx',mode:0o600});
-      if(group.scopes.find(leg=>leg.id===scope.id).runtimeIgnoreCreated)io.publish(scope.root,io.RUN_IGNORE,Buffer.from('*\n'),0o644,null);
+      const leg=group.scopes.find(leg=>leg.id===scope.id);
+      if(leg.runtimeIgnoreCreated)io.publish(scope.root,io.RUN_IGNORE,Buffer.from('*\n'),0o644,null,leg.runtimeIgnoreStaging,GROUP_JOURNAL);
     }
-    for(const scope of scopes)for(const entry of byId.get(scope.id).changes)io.publish(scope.root,entry.path,entry.after,entry.mode,entry.beforeHash);
+    for(const scope of scopes)for(const [index,entry] of byId.get(scope.id).changes.entries())
+      io.publish(scope.root,entry.path,entry.after,entry.mode,entry.beforeHash,group.scopes.find(leg=>leg.id===scope.id).changes[index].staging,GROUP_JOURNAL);
     const before=fileSnapshot(primary,GROUP_JOURNAL).hash;group.phase='committed';
-    io.publish(primary,GROUP_JOURNAL,bytes(group),0o600,before);complete=true;
+    io.publish(primary,GROUP_JOURNAL,bytes(group),0o600,before,group.commitStaging,GROUP_JOURNAL);complete=true;
     restore(group,scopes,primary);journalWritten=false;
   } catch(error) {
+    if(journalWritten&&error.installationStagingConflict) {
+      retainLocks=true;
+      throw new Error('Coordinated staging ownership conflict; recovery journal retained for owner review',{cause:error});
+    }
     if(journalWritten&&!complete)try{group.phase='applying';inspectMarkers(scopes,group,{allowMissing:true});restore(group,scopes,primary);journalWritten=false;}
       catch(recoveryError){throw new Error('Coordinated installation failed; recovery journal retained',{cause:recoveryError});}
     throw error;
   } finally {
-    unlock();
+    if(!retainLocks)unlock();
     if(!complete&&!journalWritten)for(const leg of group.scopes)io.removeEmpty(scopes.find(scope=>scope.id===leg.id).root,leg.missingDirectories);
   }
   return {changed:count,roots:scopes.length};

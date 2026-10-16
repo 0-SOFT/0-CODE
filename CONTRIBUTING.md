@@ -43,11 +43,19 @@ is excluded. Do not add deletion based only on filenames or promise migration fr
 this checkout without ownership evidence. New installations and `.0-code/` upgrades
 remain supported.
 
-The compatibility matrix is Node.js **20, 22 and 24** on Windows and Linux; CI is configured to run
-the full suite, coverage gate and smoke checks in all six cells. A workflow change
+The compatibility matrix is Node.js **20, 22 and 24** on Windows and Linux, each with engine CLIs absent and present; CI is configured to run
+the full suite, coverage gate and smoke checks in all twelve cells. A workflow change
 does not prove those jobs ran: report pending, failed or unavailable CI explicitly.
 Node.js 20 remains the compatibility minimum; do not infer exact patch coverage
 from a major-version result.
+
+Lifecycle tests run the real doctor and independently probe each CLI with `--version`.
+Without a CLI, only its named `engine-*` check may fail; installation, ownership,
+guard and MCP checks remain mandatory. An installed CLI that cannot run is a test failure.
+CI verifies the selected environment with `node tests/helpers/check-engines.mjs absent|present`.
+The present case installs `@anthropic-ai/claude-code@2.1.80`, `@openai/codex@0.162.0`
+and `opencode-ai@1.19.3` under a temporary npm prefix, without login or global installation.
+Use the same versions when reproducing that case; never replace the owner's packages or profiles.
 
 For release acceptance, run the full default suite three consecutive times on
 **each of Node 22 and 24**, with `--coverage-min=80`, and smoke on both. Repeat the

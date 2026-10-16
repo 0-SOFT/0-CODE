@@ -1,5 +1,5 @@
 // A complete plan is validated before the first mutation. Recovery never overwrites a third party.
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, chmodSync, unlinkSync, rmdirSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, chmodSync, unlinkSync, rmdirSync, openSync,closeSync,fstatSync,ftruncateSync,writeSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
@@ -10,6 +10,7 @@ const JOURNAL = '.0-code/run/installation-transaction.json';
 const LOCK = '.0-code/run/installation.lock';
 const RUN_IGNORE = '.0-code/run/.gitignore';
 export const GROUP_JOURNAL = '.0-code/run/installation-group.json';
+const STAGING_CONFLICTS=[JOURNAL+'.staging-conflict',GROUP_JOURNAL+'.staging-conflict'];
 export const hashBytes = bytes => bytes === null ? null : createHash('sha256').update(bytes).digest('hex');
 const contained = (root,path) => resolveProjectPath(root,path,{allowFramework:true});
 export function normalizeInstallationPaths(paths=null) {
@@ -44,7 +45,7 @@ export class InstallationPlan {
   change(path,content,{overwrite=false,expectedHash,mode=0o644,preserveMode=true}={}) {
     const normalized=projectRelativePath(path,{allowFramework:true});
     assertWriteAllowed(this.allowedPaths,normalized);
-    if(normalized===JOURNAL || normalized===GROUP_JOURNAL || normalized===RUN_IGNORE || normalized===LOCK || normalized.startsWith(LOCK+'/')) throw new Error('Installation plan uses transaction internals');
+    if(normalized===JOURNAL || normalized===GROUP_JOURNAL || STAGING_CONFLICTS.some(path=>normalized===path||normalized.startsWith(path+'/')) || normalized===RUN_IGNORE || normalized===LOCK || normalized.startsWith(LOCK+'/')) throw new Error('Installation plan uses transaction internals');
     if(this.changes.some(entry=>entry.path===normalized)) throw new Error('Duplicate path in installation plan');
     const before=fileSnapshot(this.root,normalized),after=content===null?null:Buffer.from(content);
     const afterHash=hashBytes(after);
@@ -83,57 +84,116 @@ function removeEmpty(root,directories) {
     catch(error) { if(!['ENOENT','ENOTEMPTY','EEXIST'].includes(error.code)) throw error; }
   }
 }
-function publish(root,path,bytes,mode,expected) {
+function stagingPath(path) {return join(dirname(path),`.0code-${randomUUID()}.tmp`).replaceAll('\\','/');}
+function validateStaging(root,path,target,occupied=[]) {
+  if(path===undefined)return;
+  const key=value=>{const normalized=projectRelativePath(value,{allowFramework:true});return process.platform==='win32'?normalized.toLowerCase():normalized;};
+  target=projectRelativePath(target,{allowFramework:true});
+  if(typeof path!=='string'||projectRelativePath(path,{allowFramework:true})!==path
+    ||dirname(path)!==dirname(target)||!/^\.0code-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.tmp$/.test(path.split('/').at(-1))
+    ||occupied.some(other=>key(path)===key(other)||key(path).startsWith(key(other)+'/')||key(other).startsWith(key(path)+'/')))
+    throw new Error('Invalid installation staging path');
+  contained(root,path);occupied.push(path);
+}
+function journalStaging(journal) {
+  const files=journal.changes.filter(entry=>entry.staging!==undefined).map(entry=>({path:entry.staging,hashes:[entry.beforeHash,entry.afterHash]}));
+  if(journal.runtimeIgnoreStaging!==undefined)files.push({path:journal.runtimeIgnoreStaging,hashes:[hashBytes(Buffer.from('*\n'))]});
+  return files;
+}
+function assertStaging(root,path,hashes) {
+  if(path===undefined)return;
+  const current=fileSnapshot(root,path).hash;
+  if(current!==null&&!hashes.includes(current))throw new Error('Recovery intersects changed staging: '+path);
+  return current;
+}
+function clearStaging(root,path,hashes) {
+  if(path===undefined)return;
+  if(assertStaging(root,path,hashes)!==null)unlinkSync(contained(root,path));
+}
+function assertJournalStaging(root,journal,{unused=false}={}) {
+  for(const entry of journalStaging(journal)) {
+    assertStaging(root,entry.path,entry.hashes);
+    if(unused&&fileSnapshot(root,entry.path).hash!==null)throw new Error('Installation staging already exists');
+  }
+}
+function clearJournalStaging(root,journal) {for(const entry of journalStaging(journal))clearStaging(root,entry.path,entry.hashes);}
+function publish(root,path,bytes,mode,expected,registeredStaging,publicationJournal) {
   const destination=contained(root,path);
   if(snapshotFile(destination).hash!==expected) throw new Error(`Installation target changed: ${path}`);
   if(bytes===null) { if(expected!==null) unlinkSync(destination);return; }
   if(!existsSync(dirname(destination)))mkdirSync(dirname(destination),{recursive:true});
-  const staging=join(dirname(destination),`.0code-${randomUUID()}.tmp`);
+  const staging=contained(root,registeredStaging??stagingPath(path));
+  const fingerprint=hashBytes(bytes);let owner;
+  const validate=()=>{
+    const current=snapshotFile(staging),stat=lstatSync(staging);
+    if(current.hash!==fingerprint||stat.dev!==owner.dev||stat.ino!==owner.ino)throw new Error('Installation staging changed: '+path);
+  };
   try {
-    writeFileSync(staging,bytes,{flag:'wx',mode});
+    try {writeFileSync(staging,bytes,{flag:'wx',mode});}
+    catch(error) {
+      if(error.code==='EEXIST') {
+        error.installationStagingConflict=registeredStaging??relative(root,staging).replaceAll('\\','/');
+        const journal=publicationJournal??(existsSync(contained(root,GROUP_JOURNAL))?GROUP_JOURNAL:existsSync(contained(root,JOURNAL))?JOURNAL:null);
+        if(journal)try {recordStagingConflict(root,journal,error);}catch(recordError){error.cause=recordError;}
+      }
+      throw error;
+    }
+    owner=lstatSync(staging);
     replaceFileSync(staging,destination,{validate() {
       if(fileSnapshot(root,path).hash!==expected) throw new Error(`Installation target changed: ${path}`);
+      validate();
     }});
     chmodSync(destination,mode);
-  } finally { try { unlinkSync(staging); } catch(error) { if(error.code!=='ENOENT') throw error; } }
+  } finally {
+    // A failed exclusive create never grants ownership of somebody else's file.
+    if(owner)try {validate();unlinkSync(staging);}catch(error){if(error.code!=='ENOENT')throw error;}
+  }
 }
-function restoreJournal(root,journal) {
+function restoreJournal(root,journal,{journalPath=JOURNAL}={}) {
+  assertNoStagingConflict(root);
   // Check the entire journal before restoring one file: an unexpected byte belongs to somebody else.
   for(const entry of journal.changes) {
     const current=fileSnapshot(root,entry.path).hash;
     if(current!==entry.beforeHash && current!==entry.afterHash) throw new Error(`Recovery intersection: ${entry.path}`);
   }
+  assertJournalStaging(root,journal);clearJournalStaging(root,journal);
   for(const entry of [...journal.changes].reverse()) {
     const current=fileSnapshot(root,entry.path).hash;
-    if(current!==entry.beforeHash) publish(root,entry.path,entry.before===null?null:Buffer.from(entry.before,'base64'),entry.beforeMode??0o644,current);
+    if(current!==entry.beforeHash) publish(root,entry.path,entry.before===null?null:Buffer.from(entry.before,'base64'),entry.beforeMode??0o644,current,entry.staging,journalPath);
   }
 }
 function validJournal(root,journal) {
   if(!journal || journal.schema_version!==1 || !Array.isArray(journal.changes) || !Array.isArray(journal.missingDirectories)) throw new Error('Invalid installation recovery journal');
   const seen=new Set();
   for(const entry of journal.changes) {
-    if(typeof entry.path!=='string'||seen.has(entry.path)||entry.path===JOURNAL||entry.path===RUN_IGNORE||entry.path===LOCK||entry.path.startsWith(LOCK+'/')) throw new Error('Invalid installation recovery entry');
+    if(typeof entry.path!=='string'||seen.has(entry.path)||entry.path===JOURNAL||STAGING_CONFLICTS.some(path=>{const value=projectRelativePath(entry.path,{allowFramework:true});return value===path||value.startsWith(path+'/');})||entry.path===RUN_IGNORE||entry.path===LOCK||entry.path.startsWith(LOCK+'/')) throw new Error('Invalid installation recovery entry');
     seen.add(entry.path);
     contained(root,entry.path);
     if(entry.before!==null && typeof entry.before!=='string') throw new Error('Invalid recovery bytes');
     if(hashBytes(entry.before===null?null:Buffer.from(entry.before,'base64'))!==entry.beforeHash
       || (entry.afterHash!==null && !/^[a-f0-9]{64}$/.test(entry.afterHash))) throw new Error('Invalid recovery fingerprint');
   }
+  const occupied=[...seen,JOURNAL,GROUP_JOURNAL,RUN_IGNORE,LOCK];
+  for(const entry of journal.changes)validateStaging(root,entry.staging,entry.path,occupied);
+  if(journal.runtimeIgnoreStaging!==undefined&&!journal.runtimeIgnoreCreated)throw new Error('Invalid runtime ignore staging');
+  validateStaging(root,journal.runtimeIgnoreStaging,RUN_IGNORE,occupied);
   for(const path of journal.missingDirectories) contained(root,path);
   return journal;
 }
 function assertMutationAvailable(root) {
+  assertNoStagingConflict(root);
   const lock=contained(root,LOCK);
   if(!existsSync(lock)) return;
   let owner;try { owner=JSON.parse(fileSnapshot(root,LOCK+'/owner.json').bytes.toString('utf8')); } catch { throw new Error('Installation lock ownership cannot be verified'); }
+  if(owner.stagingConflict!==undefined)throw new Error('Installation staging ownership conflict requires owner review');
   if(owner.host!==hostname() || !Number.isSafeInteger(owner.pid)||owner.pid<=0) throw new Error('Installation lock ownership cannot be verified');
   try { process.kill(owner.pid,0);throw new Error('Another installation transaction is active'); }
   catch(error) { if(error.code!=='ESRCH') throw error; }
 }
 function releaseDeadLock(root) {
   const lock=contained(root,LOCK);
-  if(!existsSync(lock))return;
   assertMutationAvailable(root);
+  if(!existsSync(lock))return;
   // Never erase an unexpected file placed inside the lock.
   const ownerFile=contained(root,LOCK+'/owner.json');
   // Only this one file belongs to the verified dead process; rmdir refuses other data.
@@ -148,16 +208,50 @@ function acquireMutationLock(root) {
   try { writeFileSync(contained(root,LOCK+'/owner.json'),JSON.stringify({pid:process.pid,host:hostname()})+'\n',{flag:'wx',mode:0o600}); }
   catch(error) { rmdirSync(lock);throw error; }
 }
-function releaseMutationLock(root) { unlinkSync(contained(root,LOCK+'/owner.json'));retryWindowsFileOperation(()=>rmdirSync(contained(root,LOCK)),{validate:()=>contained(root,LOCK)}); }
+function releaseMutationLock(root) {
+  // A failed exclusive create must remain blocked even through an outer finally.
+  try {assertNoStagingConflict(root);}catch(error){if(STAGING_CONFLICTS.some(path=>existsSync(contained(root,path))))return;throw error;}
+  const owner=JSON.parse(fileSnapshot(root,LOCK+'/owner.json').bytes.toString('utf8'));
+  if(owner.stagingConflict!==undefined)return;
+  unlinkSync(contained(root,LOCK+'/owner.json'));retryWindowsFileOperation(()=>rmdirSync(contained(root,LOCK)),{validate:()=>contained(root,LOCK)});
+}
+function assertNoStagingConflict(root) {
+  for(const path of STAGING_CONFLICTS)if(fileSnapshot(root,path).hash!==null)throw new Error('Installation staging ownership conflict requires owner review');
+}
+function recordStagingConflict(root,journal,error) {
+  // EEXIST proves this process did not create the stage, even when its bytes match.
+  // Keep the original before-images intact and require owner review on later recovery.
+  try {writeFileSync(contained(root,journal+'.staging-conflict'),JSON.stringify({schema_version:1,staging:error.installationStagingConflict})+'\n',{flag:'wx',mode:0o600});}
+  catch(recordError) {
+    if(recordError.code==='EEXIST')return;
+    // If the directory cannot accept a sidecar, poison the owned lock instead.
+    // A partial write also fails closed because its owner can no longer be verified.
+    const descriptor=openSync(contained(root,LOCK+'/owner.json'),'r+');
+    try {
+      const stat=fstatSync(descriptor),expected=Buffer.from(JSON.stringify({pid:process.pid,host:hostname()})+'\n');
+      if(!stat.isFile()||stat.nlink!==1||!readFileSync(descriptor).equals(expected))throw new Error('Installation lock ownership cannot be verified');
+      const blocked=Buffer.from(JSON.stringify({pid:process.pid,host:hostname(),stagingConflict:error.installationStagingConflict})+'\n');
+      ftruncateSync(descriptor,0);
+      if(writeSync(descriptor,blocked,0,blocked.length,0)!==blocked.length)throw new Error('Incomplete staging-conflict lock record');
+    }finally {closeSync(descriptor);}
+  }
+}
 
 export function recoverInstallation(root) {
   root=resolve(root);
+  assertNoStagingConflict(root);
   if(existsSync(contained(root,GROUP_JOURNAL)))throw new Error('A coordinated installation requires recovery with all authorized profile roots');
   const file=contained(root,JOURNAL);
   if(!existsSync(file)) return {recovered:false};
-  releaseDeadLock(root);
+  assertMutationAvailable(root);
   const snapshot=fileSnapshot(root,JOURNAL);
   let journal;try { journal=validJournal(root,JSON.parse(snapshot.bytes.toString('utf8'))); } catch { throw new Error('Invalid installation recovery journal'); }
+  assertJournalStaging(root,journal);
+  if(journal.runtimeIgnoreCreated) {
+    const ignore=fileSnapshot(root,RUN_IGNORE).bytes;
+    if(ignore!==null&&!ignore.equals(Buffer.from('*\n')))throw new Error('Recovery runtime ignore changed');
+  }
+  releaseDeadLock(root);
   acquireMutationLock(root);
   try {
     restoreJournal(root,journal);unlinkSync(file);
@@ -178,17 +272,23 @@ export function applyInstallationPlan(plan,{removeRuntimeIgnore=false}={}) {
   const previousIgnore=fileSnapshot(root,RUN_IGNORE);
   if(previousIgnore.bytes!==null && previousIgnore.bytes.toString('utf8')!=='*\n') throw new Error('Installation runtime ignore intersects existing project data');
   try { acquireMutationLock(root); } catch(error) { removeEmpty(root,missing);throw error; }
-  let complete=false,journalWritten=false;
-  const journal={schema_version:1,missingDirectories:missing,runtimeIgnoreCreated:previousIgnore.bytes===null,changes:plan.changes.map(entry=>({path:entry.path,
+  let complete=false,journalWritten=false,retainLock=false;
+  const journal={schema_version:1,missingDirectories:missing,runtimeIgnoreCreated:previousIgnore.bytes===null,
+    ...(previousIgnore.bytes===null?{runtimeIgnoreStaging:stagingPath(RUN_IGNORE)}:{}),changes:plan.changes.map(entry=>({path:entry.path,staging:stagingPath(entry.path),
     before:entry.before===null?null:entry.before.toString('base64'),beforeHash:entry.beforeHash,beforeMode:entry.beforeMode,afterHash:entry.afterHash}))};
   try {
     // A second installer or editor might have touched a destination while we acquired the lock.
     plan.assertReady();
-    if(previousIgnore.bytes===null) publish(root,RUN_IGNORE,Buffer.from('*\n'),0o644,null);
+    validJournal(root,journal);assertJournalStaging(root,journal,{unused:true});
     writeFileSync(file,JSON.stringify(journal)+'\n',{flag:'wx',mode:0o600});journalWritten=true;
-    for(const entry of plan.changes) publish(root,entry.path,entry.after,entry.mode,entry.beforeHash);
+    if(previousIgnore.bytes===null) publish(root,RUN_IGNORE,Buffer.from('*\n'),0o644,null,journal.runtimeIgnoreStaging);
+    for(const [index,entry] of plan.changes.entries()) publish(root,entry.path,entry.after,entry.mode,entry.beforeHash,journal.changes[index].staging);
     complete=true;
   } catch(error) {
+    if(journalWritten&&error.installationStagingConflict) {
+      retainLock=true;
+      throw new Error('Installation staging ownership conflict; recovery journal retained for owner review',{cause:error});
+    }
     if(journalWritten) {
       try { restoreJournal(root,journal);unlinkSync(file);journalWritten=false; }
       catch(recoveryError) { throw new Error('Installation failed; recovery journal retained',{cause:recoveryError}); }
@@ -197,15 +297,17 @@ export function applyInstallationPlan(plan,{removeRuntimeIgnore=false}={}) {
   } finally {
     if(complete && journalWritten) unlinkSync(file);
     if(complete&&removeRuntimeIgnore) unlinkSync(contained(root,RUN_IGNORE));
-    releaseMutationLock(root);
+    if(!retainLock)releaseMutationLock(root);
     if(!existsSync(file) && !complete&&previousIgnore.bytes===null) {
       try { unlinkSync(contained(root,RUN_IGNORE)); } catch(error) { if(error.code!=='ENOENT') throw error; }
     }
-    if(!complete) removeEmpty(root,missing);
+    if(!complete&&!journalWritten) removeEmpty(root,missing);
   }
   return {changed:plan.changes.length};
 }
 
 // The coordinator shares path validation, locks, guarded atomic writes and recovery with one-root plans.
 export const transactionIO=Object.freeze({contained,missingDirectories,removeEmpty,publish,restoreJournal,validJournal,
+  stagingPath,validateStaging,journalStaging,assertStaging,clearStaging,assertJournalStaging,clearJournalStaging,
+  assertNoStagingConflict,recordStagingConflict,
   assertMutationAvailable,releaseDeadLock,acquireMutationLock,releaseMutationLock,assertWriteAllowed,JOURNAL,RUN_IGNORE});

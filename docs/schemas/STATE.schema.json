@@ -161,12 +161,14 @@
       "items": {
         "type": "object",
         "required": ["id", "pid"],
+        "not": { "required": ["done_marker", "done_file"] },
         "properties": {
           "id": { "type": "string", "description": "Short name, used in the continuation text." },
           "pid": { "type": "integer", "description": "Process id of the background job. Liveness is what separates 'still working' from 'died before finishing'." },
           "started_at": { "type": "string", "description": "ISO 8601." },
           "log": { "type": "string", "description": "Where the job writes, relative to the project or absolute. Read it to learn the verdict." },
-          "done_marker": { "type": "string", "description": "A line the job writes when it completes. Without it, a gone process can only be reported as 'finished' — no longer running, success unverified." },
+          "done_marker": { "type": "string", "minLength": 1, "description": "Literal text written in log on completion, never a file path. Truncate the log before launch. Mutually exclusive with done_file." },
+          "done_file": { "type": "string", "minLength": 1, "description": "Readable regular result file, relative to the project or absolute. Use a new path or delete the previous file before launch; a file older than started_at is ignored. Mutually exclusive with done_marker. Finished does not imply success; read the result even if it contains ok=false." },
           "expect_by": { "type": "string", "description": "ISO 8601. Past this, a still-running job is reported as overdue. Never a stop: it is a fact for the agent, not a failure." }
         }
       }

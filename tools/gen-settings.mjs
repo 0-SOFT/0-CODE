@@ -45,6 +45,10 @@ export function buildTemplateSettings() {
         { type: 'command', command: `${HOOK_CMD} save-session-log` },
       ] }],
     },
+    // v1.22.0: the status line is the only place Claude Code reveals the plan share, so it is
+    // where the share gets recorded (hooks/usage-statusline.mjs). A person's own status line keeps
+    // working through USAGE_STATUSLINE_NEXT.
+    statusLine: { type: 'command', command: `${HOOK_CMD} usage-statusline` },
     permissions: buildPermissionsBlock(),
   };
 }

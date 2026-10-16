@@ -1,50 +1,78 @@
 {
   "schema_version": 1,
   "scope": "user",
-  "description": "A secret-free MCP registry for reproducing your toolset on a new machine. Secret VALUES are never stored here — only ${VAR} placeholders, which provision-toolset.sh substitutes from config/.env (gitignored). Copy this file to config/mcp-manifest.json and edit it to match the servers you actually use.",
+  "description": "Secret-free MCP source definitions. Pinned npm packages launch directly through node using NPM_GLOBAL_ROOT. Credentials resolve only from the launch environment. Optional account setup remains explicit.",
   "servers": [
     {
       "name": "context7",
       "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp"],
+      "npm_package": "@upstash/context7-mcp@4.0.2",
+      "command": "node",
+      "args": [
+        "${NPM_GLOBAL_ROOT}/@upstash/context7-mcp/dist/index.js"
+      ],
       "portable": true,
-      "source": "npm",
-      "note": "Library documentation lookup. No secrets."
+      "source": "local"
     },
     {
       "name": "playwright",
       "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest"],
+      "npm_package": "@playwright/mcp@0.0.79",
+      "command": "node",
+      "args": [
+        "${NPM_GLOBAL_ROOT}/@playwright/mcp/cli.js",
+        "--headless"
+      ],
       "portable": true,
-      "source": "npm",
-      "note": "Browser automation (headless). No secrets."
+      "source": "local"
     },
     {
-      "name": "memory",
+      "name": "chrome-devtools",
       "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory@latest"],
+      "npm_package": "chrome-devtools-mcp@1.7.0",
+      "command": "node",
+      "args": [
+        "${NPM_GLOBAL_ROOT}/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js"
+      ],
       "portable": true,
-      "source": "npm",
-      "note": "A knowledge graph the agent can write to and read back. No secrets."
+      "source": "local"
     },
     {
       "name": "sequential-thinking",
       "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "npm_package": "@modelcontextprotocol/server-sequential-thinking@2026.7.4",
+      "command": "node",
+      "args": [
+        "${NPM_GLOBAL_ROOT}/@modelcontextprotocol/server-sequential-thinking/dist/index.js"
+      ],
       "portable": true,
-      "source": "npm",
-      "note": "Structured step-by-step reasoning. No secrets."
+      "source": "local"
+    },
+    {
+      "name": "memory",
+      "type": "stdio",
+      "npm_package": "@modelcontextprotocol/server-memory@2026.7.4",
+      "command": "node",
+      "args": [
+        "${NPM_GLOBAL_ROOT}/@modelcontextprotocol/server-memory/dist/index.js"
+      ],
+      "portable": true,
+      "source": "local"
     },
     {
       "name": "github",
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" },
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "secrets": [
+        "GITHUB_TOKEN"
+      ],
       "portable": true,
       "source": "npm",
       "note": "Issues, pull requests, code search. Needs a token with the scopes you intend to use. The VALUE lives in config/.env, never here."
@@ -60,7 +88,10 @@
       "name": "a-python-server",
       "type": "stdio",
       "command": "${PYTHON_VENV}/bin/python",
-      "args": ["-m", "some_mcp_server"],
+      "args": [
+        "-m",
+        "some_mcp_server"
+      ],
       "portable": false,
       "linux_setup": "uv venv ~/.local/venvs/example --python 3.12 && uv pip install --python ~/.local/venvs/example/bin/python some-mcp-server",
       "note": "Not portable out of the box: the interpreter path differs per machine. `linux_setup` documents how to prepare it; provisioning reports it instead of pretending it worked."

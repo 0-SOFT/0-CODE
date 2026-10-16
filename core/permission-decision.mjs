@@ -15,7 +15,8 @@
 //
 // The destructiveness rules come from core/safety.mjs (a single source shared by all backends).
 
-import { destructiveVerdict, confirmationOf, HARD, ADVISORY } from './safety.mjs';
+import { destructiveVerdict, confirmationOf, HARD, ADVISORY, CONFIRMABLE } from './safety.mjs';
+import { createHash } from 'node:crypto';
 
 export const ARBITER = 'arbiter';        // we decide: allow / deny
 export const GUARD_ONLY = 'guard-only';  // deny only, otherwise stay silent (pre-v1.2.0 behaviour)
@@ -91,7 +92,7 @@ export function decidePermission(event, { mode = ARBITER } = {}) {
   // Ask rather than refuse (v1.11.0). The framework does not know the task; the agent does. So for
   // a rule with legitimate uses it names the consequence and asks for a reason, and a decision that
   // arrives with a stated reason can be reviewed afterwards — which a silent refusal cannot.
-  if (verdict && mode === CONFIRM) {
+  if (verdict && (mode === CONFIRM || verdict.level === CONFIRMABLE)) {
     const stated = confirmationOf(command);
 
     // A hard rule is not open to argument. Asking the agent that proposed destroying the machine to
@@ -125,4 +126,22 @@ export function decidePermission(event, { mode = ARBITER } = {}) {
   return output('allow', tool
     ? `safety-guard: ${tool} looks safe (no destructive markers found)`
     : 'safety-guard: no destructive markers found');
+}
+
+// Backend pre-checks follow the very same runtime decision as their native hook/plugin.
+export function guardReason(command, env = process.env) {
+  const result = decidePermission({ tool_name: 'Bash', tool_input: { command } }, resolveMode(env));
+  return result?.hookSpecificOutput?.permissionDecision === 'deny'
+    ? result.hookSpecificOutput.permissionDecisionReason : null;
+}
+
+// Readable confirmation, mode and a command fingerprint; never copy a shell command into a log.
+export function guardAuditRecord(event, result, report, at = new Date().toISOString()) {
+  const out = result?.hookSpecificOutput;
+  const confirmed = out?.permissionDecision === 'allow' && / rule confirmed by the agent /.test(out.permissionDecisionReason);
+  if (out?.permissionDecision !== 'deny' && !confirmed && report.recognised !== false && report.mode !== ALLOW_ALL) return null;
+  const command = event?.tool_input?.command ?? event?.tool_input?.cmd ?? '';
+  return { at, mode: report.mode, recognised: report.recognised !== false,
+    decision: out?.permissionDecision || 'none', reason: out?.permissionDecisionReason || '',
+    command_sha256: createHash('sha256').update(String(command)).digest('hex') };
 }

@@ -1,3 +1,4 @@
+import { cleanupTempDirSync } from '../helpers/index.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
@@ -122,7 +123,7 @@ test('readRoadmap returns an empty list for a file that is not there', () => {
     const file = join(dir, 'ROADMAP.md');
     writeFileSync(file, roadmap(), 'utf8');
     assert.equal(readRoadmap(file).length, 2);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { cleanupTempDirSync(dir); }
 });
 
 // The measurement this version exists for, pinned so that it cannot quietly drift back.

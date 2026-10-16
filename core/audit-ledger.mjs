@@ -58,6 +58,12 @@ export function validateLedger(ledger) {
   if (!AUDIT_KINDS.includes(String(l.audit || ''))) {
     problems.push(`audit must be one of ${AUDIT_KINDS.join(', ')}, got ${JSON.stringify(l.audit)}`);
   }
+  if (typeof l.version !== 'string' || !l.version.trim()) {
+    problems.push('version must be a nonempty string');
+  }
+  if (!Number.isSafeInteger(l.round) || l.round < 1) {
+    problems.push('round must be a positive safe integer');
+  }
   if (!Array.isArray(l.findings)) problems.push('findings must be a list, even when it is empty');
 
   // COVERAGE IS REQUIRED OF EVERY LEDGER, not only of the clean ones. An audit that looked at
@@ -140,18 +146,40 @@ export function isClean(ledger) {
 export function loopVerdict(ledgers) {
   const list = Array.isArray(ledgers) ? ledgers.filter(Boolean) : [];
   const byKind = new Map();
-  for (const l of list) if (l && l.audit) byKind.set(String(l.audit), l);
+  const duplicates = new Set();
+  for (const l of list) {
+    if (!l || !l.audit) continue;
+    const kind = String(l.audit);
+    if (byKind.has(kind)) duplicates.add(kind);
+    else byKind.set(kind, l);
+  }
 
   const missing = AUDIT_KINDS.filter((k) => !byKind.has(k));
-  const unclean = [];
+  const unclean = [...duplicates].map(kind => `${kind}: more than one ledger describes this audit`);
   let blocking = 0;
 
-  for (const kind of AUDIT_KINDS) {
-    const l = byKind.get(kind);
-    if (!l) continue;
+  // Count every supplied direction: a later clean copy must never erase an open finding.
+  for (const l of list) {
+    const kind = String(l.audit || '');
+    if (!AUDIT_KINDS.includes(kind)) {
+      unclean.push(`${kind || 'unknown audit'}: ${isClean(l).why}`);
+      continue;
+    }
     const verdict = isClean(l);
     if (!verdict.clean) unclean.push(`${kind}: ${verdict.why}`);
     if (validateLedger(l).ok) blocking += countFindings(l).blocking;
+  }
+
+  // A clean ledger from another version or round cannot vouch for this pass.
+  // Validate identity before comparing it: absent fields must not look like an agreement.
+  const present = AUDIT_KINDS.map(kind => byKind.get(kind)).filter(Boolean);
+  if (!missing.length && present.every(ledger => validateLedger(ledger).ok)) {
+    for (const [field, label] of [['version', 'versions'], ['round', 'rounds']]) {
+      if (new Set(present.map(ledger => ledger[field])).size > 1) {
+        unclean.push('these audits describe different ' + label + ': '
+          + present.map(ledger => ledger.audit + '=' + JSON.stringify(ledger[field])).join(', '));
+      }
+    }
   }
 
   if (missing.length) {

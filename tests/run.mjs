@@ -9,6 +9,7 @@
 //   node tests/run.mjs                 — every test plus the coverage report
 //   node tests/run.mjs unit            — only tests/unit
 //   node tests/run.mjs integration e2e — several folders
+//   node tests/run.mjs --test-concurrency=4 --coverage-min=80 — an explicit process limit
 
 import { spawnSync } from 'node:child_process';
 import { readdirSync, existsSync, statSync } from 'node:fs';
@@ -33,8 +34,19 @@ function findTests(dir) {
 // Argument parsing: subfolders plus --coverage-min=N (a threshold over the SOURCE modules).
 // Node 20.x does not support --test-coverage-lines, so we compute the threshold by parsing the report.
 let coverageMin = null;
+let concurrency = null;
 const subdirs = [];
 for (const a of process.argv.slice(2)) {
+  if (a.startsWith('--test-concurrency')) {
+    const match = /^--test-concurrency=(\d+)$/.exec(a);
+    const value = match ? Number(match[1]) : NaN;
+    if (concurrency !== null || !Number.isSafeInteger(value) || value < 1) {
+      console.error('tests/run.mjs: use --test-concurrency=N once, with a positive safe integer');
+      process.exit(2);
+    }
+    concurrency = value;
+    continue;
+  }
   const m = a.match(/^--coverage-min=(\d+(?:\.\d+)?)$/);
   if (m) coverageMin = parseFloat(m[1]);
   else subdirs.push(a);
@@ -48,8 +60,10 @@ if (files.length === 0) {
 }
 
 console.log(`tests/run.mjs: running ${files.length} test files through node --test with coverage\n`);
+if (concurrency !== null) console.log(`tests/run.mjs: explicit test concurrency ${concurrency}\n`);
 const res = spawnSync(process.execPath,
-  ['--test', '--experimental-test-coverage', ...files],
+  ['--test', '--experimental-test-coverage',
+    ...(concurrency === null ? [] : [`--test-concurrency=${concurrency}`]), ...files],
   { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
 if (res.stdout) process.stdout.write(res.stdout);
@@ -96,7 +110,7 @@ if (coverageMin !== null) {
   // spawnSync (tests/integration/hooks.test.mjs), and a subprocess's branches are not attributed
   // here. A low number therefore means "not verified in this measurement", which is not the same as
   // "not tested" — and telling those apart is exactly what the old single line made impossible.
-  console.log(`\nOK all source modules (${rows.length}) are at or above ${coverageMin}% of lines`);
+  console.log(`\nOK measured source modules (${rows.length}) are at or above ${coverageMin}% of lines`);
   const worst = worstBranch(rows);
   if (worst) {
     console.log(`   branches are NOT gated; the lowest is ${worst.file} at ${worst.branch}%`);

@@ -1,0 +1,110 @@
+{
+  "cliVersion": "0.162.0",
+  "nodeVersion": "v24.15.0",
+  "capturedAt": "2026-10-09T13:17:56.692Z",
+  "capture": {
+    "directory": "scratch/tmp/codex-protocol-162-128-rWKv6d",
+    "sourceCommit": "25d3789a902aa9be7bc5a38decf33af8078ca06c",
+    "rawSha256": "cb8e931a5ce43ae4f411baecd5cc1f1fc85b8e7d70b2444de140d7af1ebe05fc",
+    "runnerSha256": "e5456e2ac6fb4127f5cf54a3a4228000ee8cc428f9d5d190c4285f4be11d6144",
+    "evidence": {
+      "result.json": "cb8c1a8f070f0551817e0ce06285939b86449f23a6f44ef3e3c67522067d5397",
+      "command.json": "f7190e35e33778f8aecdf0e31ca080f5002a66ce9827e3e272ca8806b3653a9b",
+      "engine.json": "33004ea98f6d4ece1240730d248edf7048c601737c56f126773045cc8b738327",
+      "managed-restoration.json": "edd58a1e00b6586775aa71a63438d093fcaff337471999f4a11b0f507abd6406",
+      "record.json": "1023d1d86cd107ff0d6f1bbc212bcb4de0809d928695c06afd907564797e886f"
+    }
+  },
+  "request": {
+    "model": "gpt-6.1-sol",
+    "reasoningEffort": "medium",
+    "command": {
+      "bin": "C:\\Users\\test-user\\AppData\\Local\\fnm_multishells\\39064_1791388363900\\node.exe",
+      "args": [
+        "C:/Users/test-user/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js",
+        "exec",
+        "--json",
+        "-c",
+        "sandbox_mode=\"workspace-write\"",
+        "-m",
+        "gpt-6.1-sol",
+        "--dangerously-bypass-hook-trust",
+        "-c",
+        "model_reasoning_effort=\"medium\"",
+        "-c",
+        "approval_policy=\"never\"",
+        "-c",
+        "sandbox_mode=\"workspace-write\"",
+        "-c",
+        "default_permissions=\"framework\"",
+        "-c",
+        "features.hooks=true",
+        "-c",
+        "features.unified_exec=false",
+        "-c",
+        "features.unified_exec_tty=false",
+        "-c",
+        "cli_auth_credentials_store=\"file\"",
+        "-c",
+        "project_doc_max_bytes=32768",
+        "-c",
+        "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+        "-c",
+        "project_root_markers=[\".git\"]",
+        "-c",
+        "permissions.framework.filesystem={\":root\"=\"read\", \":workspace_roots\"={\".\"=\"write\"}}",
+        "-c",
+        "permissions.framework.network.enabled=true",
+        "-c",
+        "permissions.framework.workspace_roots={}",
+        "-c",
+        "projects.\"D:\\\\scratch\\\\projects\\\\codex-protocol-162-128-YwEjqO\".trust_level=\"untrusted\"",
+        "-c",
+        "windows.sandbox=\"unelevated\"",
+        "-c",
+        "mcp_servers={}",
+        "-"
+      ],
+      "cwd": "D:/scratch/projects/codex-protocol-162-128-YwEjqO",
+      "home": "D:\\scratch\\codex-guard-live-127-NeqhPu\\owned"
+    }
+  },
+  "observation": {
+    "actualLaunch": true,
+    "launchStatus": 0,
+    "elapsedMs": 23534,
+    "sessionId": "01a120d0-3925-7ea3-a5ab-ad2c369f5292",
+    "usage": {
+      "input_tokens": 29589,
+      "cached_input_tokens": 14592,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 109,
+      "reasoning_output_tokens": 0
+    },
+    "outputSha256": "c7f729f94a4bffdf84211e67995eb11391379c2385c9d46e231cec34c079b918",
+    "completedAgentMessages": 2,
+    "commandNodeVersion": "v22.15.0",
+    "multiTurnAcceptance": false
+  },
+  "fixture": {
+    "file": "0.162.0-protocol.jsonl",
+    "sha256": "4e86569a4c6d88ea4d34fed1745ef01cdd09f93be2b470ce4a992751a7562390",
+    "eventsOtherwiseUnchanged": true,
+    "serialization": "Cyrillic encoded with standard JSON Unicode escapes; decoded events unchanged. Raw event stream contained no personal project or user paths."
+  },
+  "managedRestoration": [
+    {
+      "name": "framework-owner.json",
+      "present": true,
+      "sha256": "966a9212c4722bb706b6601ad53b9797e5f1b690ddf542ec38f04d85edaf4a81",
+      "match": true
+    },
+    {
+      "name": "framework-mcp.json",
+      "present": false,
+      "sha256": null,
+      "match": true
+    }
+  ],
+  "limit": "Version is verified by CLI --version and npm metadata; model/effort are requested launch arguments. The stream does not prove an internal model identifier. This single safe command is not repair acceptance or a guard refusal."
+}

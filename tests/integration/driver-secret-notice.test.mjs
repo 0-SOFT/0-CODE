@@ -1,3 +1,4 @@
+import { cleanupTempDirSync } from '../helpers/index.mjs';
 // tests/integration/driver-secret-notice.test.mjs — the secrets notice, on the default driver.
 //
 // README, GUIDELINE and docs/failure-modes all state this without naming an engine: if a commit
@@ -52,7 +53,7 @@ function mkRepo() {
   writeFileSync(join(dir, 'readme.txt'), 'start\n', 'utf8');
   git(dir, ['add', '-A']);
   git(dir, ['commit', '-qm', 'initial']);
-  return { dir, cleanup: () => { try { rmSync(dir, { recursive: true, force: true }); } catch {} } };
+  return { dir, cleanup: () => { try { cleanupTempDirSync(dir); } catch {} } };
 }
 
 // One turn of the Claude Code driver. stderr is what the notice writes to.

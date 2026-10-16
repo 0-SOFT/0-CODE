@@ -46,17 +46,17 @@ test('ClaudeBackend.id', () => {
 // silently refuses Write/Edit/Bash and degenerates into a plan with no work.
 // v1.2.0: by default the prompt goes to standard input and no longer appears in the arguments —
 // otherwise the Windows command line is cut off at about 8100 characters (experiment L1).
-test('buildClaudeArgs: headless defaults — the prompt is NOT in the arguments, plus bypassPermissions and strict-mcp-config', () => {
+test('buildClaudeArgs: headless defaults preserve personal MCP and keep the prompt on stdin', () => {
   const args = buildClaudeArgs({ prompt: 'p' }, {});
   assert.deepEqual(args, ['-p', '--output-format', 'json',
-    '--permission-mode', 'bypassPermissions', '--strict-mcp-config']);
+    '--permission-mode', 'bypassPermissions']);
   assert.ok(!args.includes('p'), 'the prompt text must not reach the arguments');
 });
 
 test('buildClaudeArgs: promptViaStdin:false restores the old way (compatibility)', () => {
   const args = buildClaudeArgs({ prompt: 'p', promptViaStdin: false }, {});
   assert.deepEqual(args, ['-p', 'p', '--output-format', 'json',
-    '--permission-mode', 'bypassPermissions', '--strict-mcp-config']);
+    '--permission-mode', 'bypassPermissions']);
 });
 
 test('buildClaudeArgs: the argument length does not depend on the prompt size', () => {
@@ -68,7 +68,7 @@ test('buildClaudeArgs: the argument length does not depend on the prompt size', 
 test('buildClaudeArgs: the model is added and the default flags are kept', () => {
   const args = buildClaudeArgs({ prompt: 'p', model: 'm' }, {});
   assert.deepEqual(args, ['-p', '--output-format', 'json', '--model', 'm',
-    '--permission-mode', 'bypassPermissions', '--strict-mcp-config']);
+    '--permission-mode', 'bypassPermissions']);
 });
 
 test('buildClaudeArgs: an explicit permissionMode outranks both the default and env', () => {
@@ -80,7 +80,7 @@ test('buildClaudeArgs: an explicit permissionMode outranks both the default and 
 
 test('buildClaudeArgs: env CLAUDE_HEADLESS_PERMISSION_MODE overrides the default', () => {
   const args = buildClaudeArgs({ prompt: 'p' }, { CLAUDE_HEADLESS_PERMISSION_MODE: 'default' });
-  assert.deepEqual(args.slice(-3), ['--permission-mode', 'default', '--strict-mcp-config']);
+  assert.deepEqual(args.slice(-2), ['--permission-mode', 'default']);
 });
 
 test('buildClaudeArgs: permissionMode "none" → the mode flag is not added', () => {

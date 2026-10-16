@@ -1,14 +1,64 @@
+import { cleanupTempDirSync } from '../helpers/index.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  runCli, quoteWin, processIdentity, stillOurs, sweepStaleChildren,
+  runCli, processIdentity, stillOurs, sweepStaleChildren, readWindowsProcesses,readWindowsProcessesAsync,
 } from '../../core/backends/spawn-cli.mjs';
+import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { writeNpmNodeShim } from '../helpers/npm-shim.mjs';
 
-test('quoteWin: quotes only for spaces and metacharacters', () => {
-  assert.equal(quoteWin('simple'), 'simple');
-  assert.equal(quoteWin('with space'), '"with space"');
-  assert.equal(quoteWin('a&b'), '"a&b"');
-  assert.equal(quoteWin('say "hi"'), '"say \\"hi\\""');
+test('real launchers preserve shell metacharacters, quotes and percent references as argv data', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'cli-argv-'));
+  t.after(() => cleanupTempDirSync(root));
+  const script = join(root, 'arguments.mjs');
+  writeFileSync(script, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))');
+  const values = ['a"b', '%USERNAME%', 'safe" & echo AUDIT129_INJECTED & rem "',
+    'trailing slash\\', 'space and slash\\', '', 'line one\nline two', '^!<>()|&', '\u0420\u0443\u0441\u0441\u043a\u0438\u0439 \u0442\u0435\u043a\u0441\u0442'];
+  for (const launcher of [runCli, runCliAsync]) {
+    for (const opts of [{}, { shell: true }]) {
+      const result = await launcher(process.execPath, [script, ...values], { encoding: 'utf8', ...opts });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, JSON.stringify(values), 'exact argv and no extra command output');
+    }
+  }
+});
+
+test('Windows npm Node shims preserve argv in both launchers without invoking cmd.exe',
+  { skip: process.platform !== 'win32' }, async t => {
+    const root = mkdtempSync(join(tmpdir(), 'cli-npm-shim-'));
+    t.after(() => cleanupTempDirSync(root));
+    mkdirSync(join(root, 'node_modules', 'fixture'), { recursive: true });
+    writeFileSync(join(root, 'node_modules', 'fixture', 'cli.mjs'),
+      'process.stdout.write(JSON.stringify(process.argv.slice(2)))');
+    const shim = join(root, 'fixture.cmd');
+    writeNpmNodeShim(shim);
+    const values = ['quote" & echo AUDIT129_INJECTED & rem "', '%USERNAME%', 'space \\', ''];
+    for (const launcher of [runCli, runCliAsync]) {
+      const result = await launcher(shim, values, { encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, JSON.stringify(values));
+    }
+  });
+
+test('Windows reads identities through CIM without WMIC and retains a fallback', () => {
+  const identity = '20261007120000.000000+000';
+  const calls = [];
+  const table = readWindowsProcesses({ env: { SystemRoot: 'C:\\Windows' }, inspect(bin, args) {
+    calls.push(bin);
+    assert.match(bin, /powershell\.exe$/i);
+    assert.match(args.at(-1), /Get-CimInstance Win32_Process/);
+    return { status: 0, stdout: `4150,${identity},4100\n4160,${identity},4150\n` };
+  } });
+  assert.deepEqual(table.get(4150), { identity, parentPid: 4100 });
+  assert.equal(calls.length, 1, 'WMIC is unnecessary when CIM works');
+  const fallback = readWindowsProcesses({ inspect(bin) {
+    if (bin !== 'wmic') return { status: 1, stdout: '' };
+    return { status: 0, stdout: `Node,CreationDate,ParentProcessId,ProcessId\nHOST,${identity},4100,4150\n` };
+  } });
+  assert.deepEqual(fallback.get(4150), { identity, parentPid: 4100 });
+  assert.equal(readWindowsProcesses({ inspect() { throw new Error('unavailable'); } }).size, 0);
 });
 
 test('runCli: a real cross-platform launch (node)', () => {
@@ -16,6 +66,20 @@ test('runCli: a real cross-platform launch (node)', () => {
   const r = runCli(process.execPath, ['-e', 'process.stdout.write("ok123")'], { encoding: 'utf8' });
   assert.equal(r.status, 0);
   assert.match(r.stdout, /ok123/);
+});
+test('async Windows metadata uses the same CIM and WMIC parsers and honors cancellation',async()=>{
+  const identity='20261007120000.000000+000';let calls=0;
+  const cim=await readWindowsProcessesAsync({inspect:async()=>{
+    calls++;return {status:0,stdout:`4150,${identity},4100\n`};
+  }});
+  assert.equal(calls,1);assert.deepEqual(cim.get(4150),{identity,parentPid:4100});
+  const fallback=await readWindowsProcessesAsync({inspect:async bin=>bin==='wmic'
+    ?{status:0,stdout:`Node,CreationDate,ParentProcessId,ProcessId\nHOST,${identity},4100,4150\n`}:{status:1}});
+  assert.deepEqual(fallback.get(4150),{identity,parentPid:4100});
+  const controller=new AbortController();controller.abort();
+  const cancelled=await readWindowsProcessesAsync({signal:controller.signal,inspect:async()=>{throw new Error('must not inspect');}});
+  assert.equal(cancelled.size,0);
+  assert.equal((await readWindowsProcessesAsync({inspect:async()=>{throw new Error('unavailable');}})).size,0);
 });
 
 test('runCli: an argument with spaces arrives intact (quoting)', () => {
@@ -25,9 +89,8 @@ test('runCli: an argument with spaces arrives intact (quoting)', () => {
   assert.equal(r.stdout, 'a b c');   // it did not split into three arguments
 });
 
-// v1.2.0, experiment L1: the Windows command line is cut off between 8000 and 8100 characters.
-// Framework prompts are tens of kilobytes, so long text must travel through standard input
-// rather than through the arguments.
+// v1.2.0 experiment L1 measured cmd.exe's ~8K limit. Since 1.29.0 native launches avoid cmd;
+// stdin still carries large prompts without depending on a platform-specific argv limit.
 const READ_STDIN = 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write("LENGTH="+s.length))';
 
 test('runCli: passing data through standard input (short text)', () => {
@@ -43,15 +106,12 @@ test('runCli: text beyond the Windows command-line limit passes through standard
   assert.match(r.stdout, /LENGTH=20000/);
 });
 
-test('runCli: the same volume IN AN ARGUMENT fails on Windows (proof that stdin is required)', () => {
+test('runCli: long argv no longer crosses the smaller cmd.exe limit', () => {
   const big = 'x'.repeat(20000);
   const r = runCli(process.execPath, ['-e', 'process.stdout.write(String(process.argv[1].length))', big],
     { encoding: 'utf8' });
-  if (process.platform === 'win32') {
-    assert.notEqual(r.status, 0, 'on Windows such an argument must be rejected by the system');
-  } else {
-    assert.equal(r.status, 0, 'on POSIX the limit is incomparably higher — there is no restriction');
-  }
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, '20000');
 });
 
 // v1.3.0: a silent hang is a proven failure mode of external engines (opencode hangs if standard
@@ -153,7 +213,7 @@ test('orphan registry: the next launch finishes off the children of a killed pre
     sweepStaleChildren(registry);
     assert.equal(existsSync(registry), false, 'after sweeping, the registry must be gone');
     setChildRegistryFile(null);
-  } finally { rmSync(d, { recursive: true, force: true }); setChildRegistryFile(null); }
+  } finally { cleanupTempDirSync(d); setChildRegistryFile(null); }
 });
 
 // v1.5.0, the lesson of the final gate: a total time cap killed HONEST work. On a real task the
@@ -174,12 +234,22 @@ test('silence cap: a working process is not aborted even though it outlives the 
   assert.match(r.stdout, /tick/);
 });
 
-test('silence cap: a process that goes quiet is aborted', async () => {
-  const r = await runCliAsync(process.execPath,
+test('silence cap: a process that goes quiet is aborted', { timeout: 30000 }, async t => {
+  // Freeze the parent's deadline clock until a real child has actually produced output.
+  // Node startup under the full suite can exceed the silence cap; startup is not this assertion.
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  t.after(() => killAllChildren());
+  let ready, output = '';
+  const started = new Promise(resolve => { ready = resolve; });
+  const pending = runCliAsync(process.execPath,
     ['-e', 'process.stdout.write("started");setTimeout(()=>{},60000)'],
-    { idleTimeoutMs: 600 });
+    { idleTimeoutMs: 600, onChunk(chunk) { output += chunk; if (output.includes('started')) ready(); } });
+  await started;
+  t.mock.timers.tick(600);
+  const r = await pending;
   assert.equal(r.timedOut, true, 'silence longer than the cap means a hang');
   assert.match(r.stdout, /started/, 'whatever was printed is preserved');
+  assert.notEqual(r.cleanupRefused, true, 'the owned real process must be stopped');
 });
 
 test('the total cap remains a far backstop', async () => {
@@ -236,6 +306,14 @@ test('an identity is what the process is, not what we hope it is', async () => {
   } finally { try { child.kill('SIGKILL'); } catch { /* already gone */ } }
 });
 
+test('a long owner timeout does not overflow into an immediate abort of a real child', async () => {
+  const result = await runCliAsync(process.execPath, ['-e', "setTimeout(() => console.log('LONG_TIMER_OK'), 50)"],
+    { timeoutMs: 9999 * 3600000, idleTimeoutMs: 99 * 60000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.timedOut, false);
+  assert.match(result.stdout, /LONG_TIMER_OK/);
+});
+
 test('a registry from before v1.15.0 carries no identities, so it kills nothing', async () => {
   const { mkdtempSync, writeFileSync: write, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
@@ -253,6 +331,6 @@ test('a registry from before v1.15.0 carries no identities, so it kills nothing'
     assert.ok(alive, 'the bystander must survive a sweep it cannot be proved to belong to');
   } finally {
     try { bystander.kill('SIGKILL'); } catch { /* already gone */ }
-    rmSync(dir, { recursive: true, force: true });
+    cleanupTempDirSync(dir);
   }
 });

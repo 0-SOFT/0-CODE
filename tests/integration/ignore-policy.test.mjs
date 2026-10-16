@@ -12,9 +12,10 @@
 // they were led to green by the implementation and never edited to fit it.
 
 import { test } from 'node:test';
+import { cleanupTempDir } from '../helpers/index.mjs';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, copyFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -66,23 +67,25 @@ test('ignore policy: the WORKING tree refuses every secret-bearing path', () => 
   );
 });
 
-test('ignore policy: the PUBLISHED tree refuses every secret-bearing path', () => {
+test('ignore policy: the PUBLISHED tree refuses every secret-bearing path', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ignore-public-'));
   try {
-    spawnSync('git', ['init', '-q'], { cwd: dir });
+    const init = spawnSync('git', ['init', '-q'], { cwd: dir, encoding: 'utf8' });
+    assert.equal(init.status, 0, init.stderr || 'git init failed');
     copyFileSync(join(ROOT, 'templates', 'gitignore.public'), join(dir, '.gitignore'));
     const uncovered = SECRET_BEARING.filter(p => !ruleCovers(dir, p));
     assert.deepEqual(
       uncovered, [],
       `templates/gitignore.public does not cover: ${uncovered.join(', ')}`,
     );
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { await cleanupTempDir(dir); }
 });
 
-test('ignore policy: the two trees agree — neither protects what the other does not', () => {
+test('ignore policy: the two trees agree — neither protects what the other does not', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ignore-parity-'));
   try {
-    spawnSync('git', ['init', '-q'], { cwd: dir });
+    const init = spawnSync('git', ['init', '-q'], { cwd: dir, encoding: 'utf8' });
+    assert.equal(init.status, 0, init.stderr || 'git init failed');
     copyFileSync(join(ROOT, 'templates', 'gitignore.public'), join(dir, '.gitignore'));
     const drift = SECRET_BEARING
       .map(p => ({ path: p, working: ruleCovers(ROOT, p), published: ruleCovers(dir, p) }))
@@ -92,7 +95,7 @@ test('ignore policy: the two trees agree — neither protects what the other doe
       'the ignore policy is stored twice and the copies disagree: ' +
       drift.map(d => `${d.path} (working=${d.working}, published=${d.published})`).join('; '),
     );
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { await cleanupTempDir(dir); }
 });
 
 test('ignore policy: no secret-bearing path is stuck in the index', () => {

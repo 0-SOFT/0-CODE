@@ -167,7 +167,7 @@ export function terminalAdvice(inspected) {
   const over = inspected.filter(j => j && TERMINAL.has(j.state)).map(j => j.id);
   if (over.length === 0) return null;
   return `jobs over: ${over.join(', ')} — read the log, take the result, and remove them from ` +
-    'running_jobs in docs/STATE.md; the registry is what is running now, not a history.';
+    'running_jobs in the state role; the registry is what is running now, not a history.';
 }
 
 // Everything the classifier needs to know about one record, gathered from disk. Reading a log is

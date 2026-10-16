@@ -9,12 +9,332 @@ All notable changes to this project are documented here. The format follows
 > below records what changed and — more usefully — **what was learned**. Where a decision was later
 > reversed, the reversal is listed too: this project treats a disproven assumption as a result.
 
-**Current release: v1.20.0.** Measured on 2026-09-18, from the published tree run as a real git
-repository: **476 tests** (5 announced as skipped there, because they exercise a tool that is
-deliberately not published), **132 smoke checks** with 6 announced as skipped, **31 source modules**
-at or above 80 % of lines, **124 files** exported with no secrets and nothing untranslated. Branch
-coverage is reported but deliberately not gated — the lowest is `hooks/ralph-loop-stop.mjs` at 12.5 %,
-which is what a module exercised only through a subprocess looks like from here.
+**Current version: v2.0.2.** Validation for this version is recorded with each change; earlier runs below are historical evidence.
+
+This public update includes changes from **1.21.0 through 2.0.2** after the published
+1.20.0. Version 1.21.0 was prepared locally but was not published. Older sections
+record behavior and measurements at the time; current installation instructions
+are in [INTEGRATE](INTEGRATE.md) and [PROJECT_SETTINGS](docs/PROJECT_SETTINGS.md).
+Private development reports, decisions and task documents are excluded; configured
+document roles in installed projects remain part of the product.
+
+---
+
+## [v2.0.2] - 2026-10-15 - Keep Windows CLI children alive across Node versions
+
+- Delayed Windows process metadata uses the original child's exit state and exact launch record without sending a signal. `ChildProcess.kill(0)` terminates live children on Windows Node 22.15.0; the old-code regression passes on Node 20.20.2 and 24.15.0. Asynchronous CIM, fresh identity guards for stale PIDs, deadlines and process-tree cleanup remain in place.
+- A real-child regression waits for CIM identity binding before normal exit with complete stdout/stderr; delayed identity tests cover exit, open pipes, observed termination and replaced launch records.
+- A private project reference is removed from a public test and the private export rules reject that name before destination writes, with redacted diagnostics.
+- Maintainer, testing, cycle and PR templates require explicit runtime evidence. CI is configured for Node 20/22/24 on Linux and Windows; local release acceptance requires three full default suites on each of Node 22/24, smoke on both, Node 20 process/CLI checks, and a separate normal-environment CLI lifecycle. Configured CI is not evidence of execution.
+
+---
+
+## [v2.0.1] - 2026-10-14 - Prepare a public release
+
+- MCP doctor accepts valid installed SemVer versions at or above the tested minimum, while checking the package name and entry separately. Integration preserves newer dependencies and asks explicitly for the toolset scope.
+- Public export validates a snapshot of every output file before writing, including settings, ignore rules and the generated catalog. Read failures and all report-mode violations fail closed; diagnostics use rule IDs and locations without matching values.
+- Windows DNS failures 11001/11004 receive transport retries. The lifecycle CLI has command help and rejects malformed options without project writes.
+- The supervisor records separate redacted attempt journals for Claude, Codex and OpenCode, including probes, retries and failures. Journals follow the configured log role and module switch, preserve foreign files and do not count as agent progress or duplicate usage accounting.
+- Installation removes redundant path checks and directory creation while retaining ownership checks before publication. Bootstrap tests measure default installation and repeat times; lock competition preserves all 16 live contenders and reports child errors across the start barrier.
+- An inaccessible loop-owner file can no longer be mistaken for a free project. Temporary Windows read failures are retried; persistent failures preserve the owner and release the mutation mutex. Synthetic UUIDs and recorded fixture paths avoid private data in test assets.
+- Initial Windows process metadata is collected asynchronously, leaving output capture and deadlines active. Delayed metadata is bound to a still-live original child handle; unnecessary probes are cancelled and fresh checks before PID-based cleanup remain intact.
+- Installer tests observe actual filesystem progress with managed child cleanup, preserving their full module selections. Temporary Windows trees use bounded, sequential cleanup after recursive-removal failures, while persistent failures and outside paths remain visible.
+- Public documentation and all ten README translations use `https://github.com/0-SOFT/0-CODE`, describe all three engines, the `.0-code/` layout and owner settings, and distinguish the five public MCP definitions from excluded private tool bodies. Valid newer npm prerequisites are preserved. New installation and `.0-code/` upgrade are supported; automatic root-based 1.x migration requires excluded `config/legacy-installations.json` ownership evidence. Private document references are removed from public guides; project role paths remain configurable.
+- Public acceptance tests use synthetic HTTP MCP definitions and the distributed decision template, preserving transport and custom-role coverage without depending on the private catalog or development decisions. Delivery and migration tests use original synthetic inputs when private evidence is absent; development checks retain their real corpus. The isolated user-scope CLI test observes actual filesystem progress instead of abandoning an active installation after a fixed 30 seconds.
+- The silence-timeout regression waits for output from a real child before advancing the test clock through the unchanged 600 ms cap. Slow process startup can no longer prevent the test from reaching the quiet phase; real-time working-process and overall-timeout checks remain in the suite.
+
+---
+
+## [v2.0.0] — 2026-10-14 — Integrate into an existing project
+
+- **Breaking installation layout:** framework code, configuration, schemas and templates now live in `.0-code/`; locks, progress, child records and backups live in ignored `.0-code/run/`. Native engine locations receive only required entries. Old installations use the reviewed `migrate` plan rather than copying code over project folders. The obsolete Claude plugin path is removed.
+- One schema and resolver configure nine document roles, language, engines and seven optional modules. Existing project templates and tools take precedence. A deterministic inventory discovers native tools, MCP, check commands, documents and legacy installations. One CLI and one short `INTEGRATE.md` cover install, upgrade, remove, migrate and start; Bash and PowerShell bootstrap are thin wrappers.
+- The development inventory classified 417 entries: 47 defaults, 227 optional and 143 removed; 180 obsolete payload files were physically removed. This private inventory and its tool bodies are excluded from the public source, whose catalog contains only context7, playwright, chrome-devtools, sequential-thinking and memory. Native delivery supports all three engines and reports unsupported forms. These five MCP require local npm packages; account examples and credentials stay opt-in. User scope uses one independent installation and receipt, with separate removal and project scope for a different selection. Version 2.0.1 treats tested npm versions as SemVer minima and preserves valid newer packages.
+- Transactions preflight ownership and collisions before writing. Native JSON edits preserve owner bytes, later fields, hooks and comments; clone-safe receipts store only hashes of owned additions. Namespace Git attributes prevent inherited text and clean filters from changing receipt bytes. Doctor refuses to execute a modified guard and handles CommonJS projects correctly. Codex sandbox trust uses a literal project map; loop ownership tolerates brief Windows read locks without abandoning its mutex.
+- Migration with published ownership evidence proves exact files and instruction blocks, preserves unknown content, backs up changes and refuses an active old cycle. A development scratch copy preserved 572 owner files, removed 64 proven framework files, passed doctor and repeated without changes; the original remained unchanged. This result used `config/legacy-installations.json`, excluded from the public source, and does not prove automatic 1.x migration from the public checkout. Start atomically binds one cycle prompt, version, stage, limit and fresh instruction.
+- Two consecutive audits found no new P0/P1; 32 findings are closed (five P0, fifteen P1, twelve P2), including one evidence-based P2 rejection. Three default 940/940 suites, 54/49 smoke checks, settings and scratch export passed. The standard installed Codex supervisor made two real work commits and stopped at its cap; its guard denied the control command before execution. Authentication was not copied and engine model preferences were inherited.
+- README and all ten translations, quick start, engine/setup/security guides and the single project-settings table describe the new contract. Native Windows and the Codex model cycle were exercised; native Linux/macOS, every specialized tool stack, external account access and integration into real owner projects are not claimed.
+
+---
+
+## [v1.30.0] — 2026-10-13 — Engine settings belong to the owner
+
+- A shared settings resolver applies explicit call/supervisor options, then environment, then native engine configuration. Unset model and reasoning effort produce no flags in Codex, Claude Code or OpenCode; optional model routing does not select effort. Project environment files are parsed as data and cannot override host launch variables.
+- Codex defaults to the device's personal home and existing login, with full access. Independent managed homes and filesystem sandboxing remain explicit settings. Authentication is never copied or linked. An external PreToolUse guard is delivered through CLI configuration without framework writes to the personal config; native Codex may record trust on its first execution in a new project.
+- Generic Codex configuration is accepted except settings that replace an enabled framework guard. Unified execution and TTY are disabled while that guard is enabled: a live 0.162.1 probe reproduced stdin continuation bypassing PreToolUse. Allow-all omits these restrictions. Native configuration metadata preserve explicit instruction budgets, fallback filenames and root markers; otherwise the budget grows to fit the actual instructions. Strict limits and strict old-version rejection are opt-in.
+- Personal Claude MCP are available by default; strict MCP configuration is opt-in. A live turn loaded personal memory/github schemas without invoking account tools. One guard decision module supplies all three engines and all modes. Force push requires a specific reason in every enabled mode; critical root/home/disk destruction and mass agent-process termination cannot be confirmed.
+- Shared turn deadlines default to 99 minutes of silence and 9999 hours total, with representable timer slices. Temporary network failures retry without a default cap, wait up to five minutes between attempts, recheck fresh stop conditions and ownership, and use an optional bot outage notice after ten minutes. STATE no_progress_after changes or disables the common default of three measured empty turns.
+- Historical guard review linked 620 mentions across 44 logs, separating command inputs from reports and quoted refusals. Fixed ordinary format help and literal PowerShell here-string data being denied; evaluator input and later dangerous commands remain checked. The final matrix ran 300 real guard processes. Two fresh audit rounds passed after the live PowerShell finding, followed by three default full suites and the final five-turn supervisor acceptance.
+- Seven P1 and six P2 defects in implementation, tests and documentation were corrected; native trust persistence was separately reproduced and explained. No native Linux acceptance, complete dynamic-shell interpretation or historical credential revocation is claimed. Current metadata, ten translations, installation templates and the single engine-settings table agree with the tested behavior.
+
+---
+
+## [v1.29.0] — 2026-10-12 — Production audit across all three engines
+
+- Fixed 26 reproduced defects: seven P0, seven P1, ten P2 and two P3. A separate historical P1 requires the owner to revoke credentials; history was preserved. Fresh audit rounds 9 and 10 converged with no new P0/P1 and no unresolved product P2.
+- Native Windows CLI launches preserve argv without cmd.exe evaluation, including standard npm shims. The guard recognizes absolute wrappers, nested shells, PowerShell EncodedCommand and recursive deletion options; a confirmation cannot override a later hard denial.
+- OpenCode restores trusted plugin bytes before every attempt. All three MCP adapters validate the shared source/type contract, reject missing required values and prevent known credential literals or aliases in public fields. Private values use isolated configuration or stdin instead of process arguments.
+- Atomic publication tolerates brief Windows read locks through bounded, specific retries with path revalidation. YAML strings preserve exact types and control characters; STATE verifies a lossless round trip before rotating backups or publishing, refusing unsupported data without exposing values or changing the original.
+- Installer fixtures now carry current dependencies. Public literals retain their runtime values without a language-gate false positive. Coverage output explicitly describes the measured modules; branches are still reported separately.
+- Three consecutive default full suites passed 799/799 with no skips, all 50 measured modules passed the 80% line gate, smoke passed 174/0/0, settings and ignore policy matched, and every one of 209 scratch-exported files passed the credential scan. Native Linux execution and credential revocation are not claimed.
+- Live Codex 0.162.0 / gpt-6.1-sol / medium completed five work turns plus one preflight, with zero retries, a real source-fix commit, the original test byte-identical and passing 1/1, and an autonomous iteration_cap stop at 5. All twelve acceptance conditions passed; 609,767 input plus output tokens, with cached and reasoning subsets counted once. The managed owner records were restored; authentication files were neither inspected nor imported.
+
+---
+
+## [v1.28.0] — 2026-10-09 — Installed Codex loop and reproducible verification
+
+- Execution now defaults to gpt-6.1-sol with medium reasoning. Luna/low remains for explicitly light work. Three configurations were measured on the same source-repair task: Luna/low and Sol/medium repaired and committed with the original test unchanged; Sol/high returned HTTP 503 without usage. A single observation is not a model reliability benchmark.
+- The installed CLI and installer pin are 0.162.0. A genuine new stream preserves thread identity, final text and all five token fields. Earlier 0.160.1 and 0.161.0 recordings remain historical. Cloud instructions, QUICKSTART, setup documentation and all ten README translations agree on the pin.
+- Acceptance uses one constant repair task, no numbered scenario or mandatory shell: five completed work turns, one real source-fix commit, byte-identical original test passing 1/1, and an autonomous iteration_cap stop at 5. Requested model/effort were captured for all six calls; the final candidate used 637,703 input plus output tokens. The earlier successful candidate and both failed acceptance runs remain recorded. No USD or subscription percentage was inferred.
+- The supervisor prompt labels the current working iteration. Loop ownership is serialized with atomic publication; exporting over the source or its ancestors/descendants refuses before mutation. Bootstrap treats mandatory copy/publication errors as failures and publishes the version marker last.
+- Bootstrap uses Bash built-ins for additive rules instead of a separate grep process for every line. The measured reduction preserves existing destination bytes, full-line matching and repeatability; CRLF normalization is explicit. Transient Windows fixture cleanup uses the existing awaited, bounded cleanup helper and still rejects persistent errors. Replay version metadata follows the adapter pin.
+- A later post-audit run exposed a one-shot lock release leaving its owner record behind. Normal completion now awaits bounded release retries and rechecks ownership each time; synchronous signal handlers retain their existing contract. A further run exposed ENOTEMPTY during another fixture cleanup, so synchronous and asynchronous temporary cleanup now share one bounded policy across the suite. Persistent errors remain failures; assertions and timeouts are unchanged.
+- Final candidate bc47d34 passed three consecutive default full suites: 756/756 each, no concurrency argument, no skips, 45 measured source modules with a minimum 84.52% line coverage. Windows smoke passed 169/0/0; settings, ignore policy, a 193-file public export and secret scan passed. Branch coverage is reported separately and is not gated; the minimum is 12.5%. No native Linux or network-filesystem acceptance is claimed.
+
+---
+
+## [v1.27.0] — 2026-10-08 — Protected Codex configuration and project installation
+
+- An owned home outside writable roots restores the host-captured detector, hook, rules, configuration and project instructions before preflight and every work attempt. A restoration failure prevents execution. Personal Codex files are never inspected or imported.
+- Native hook denial uses JSON with exit 0; allowing a tool produces empty output. A full PowerShell wrapper test reproduced the loss of exit 2. Unified execution and interactive TTY are disabled. Real hook-only and rules-only tool refusals left a proven local trap unchanged; project detector substitution did not weaken the external guard.
+- Untrusted project configuration stays excluded while a complete external AGENTS snapshot delivers project instructions. The combined 32 KiB source budget is checked before installation and every launch. A live control word proved delivery without file-reading tools.
+- MCP credential references are isolated per server. Real calls covered two stdio servers and one local HTTP endpoint. Bootstrap accepts Codex, validates before writing and refreshes instructions without replacing an independent login. Its preview writes nothing and starts no engine.
+- Login instructions scope CODEX_HOME to the login process; execution selects FRAMEWORK_CODEX_HOME. Dollar caps refuse before a Codex launch because exec provides tokens, not USD.
+- The audit verdict now requires explicit matching versions and rounds and rejects duplicate or invalid directions. Four fresh sequential audit ledgers reached zero open P0–P2. Multi-turn acceptance and the full user documentation follow in 1.28.0.
+- Verification at a525891: 678/678, no skips, 44 source modules above the line threshold; Windows smoke 168/0/0; clean 177-file export and secret scan. The earlier 677/678 metadata failure is retained in the release report.
+
+---
+
+## [v1.26.0] — 2026-10-07 — Codex turns through the shared supervisor
+
+**Windows limitation before 1.27.0:** the default Codex loop cannot execute commands
+without a working sandbox profile, which this release does not install. Exit 0 and
+turn.completed can describe an empty turn. The successful commit probe below used
+a manually supplied profile, rather than the default installation. Subscription
+exhaustion is recognized from error text; no live exhausted-subscription recording
+exists. Its pause behavior is tested with synthetic errors and recorded-stream replay.
+
+The adapter runs Codex CLI 0.160.1 through the existing Backend port. Real Windows JSONL streams
+cover success, an unsupported model and resuming a thread. The execution preset, `gpt-6-luna`,
+fixed a source bug and committed it in a disposable project; the original test was unchanged.
+
+- Native Windows argv and closed stdin; explicit resume, silence and total timeouts. Usage is the
+  difference between totals from the same thread; an unknown baseline stays unknown. No USD is
+  inferred from tokens. Version, login and event-schema checks refuse incompatible starts.
+- Model errors, temporary interruptions and subscription exhaustion are classified separately;
+  `usage_limited` pauses without retrying. The factory accepts `codex` and still refuses typos.
+- Six fresh audit rounds reached zero P0–P2 after nine distinct blocking findings were fixed.
+  Process registration and verified stopping are shared by all three adapters; an unproved owner
+  cannot authorize termination. Two P3 findings remain named in the audit records.
+- Windows smoke paths use `cygpath -m` when available. Coverage parsing accepts Node24 reports;
+  exported Markdown links normalize native Windows separators. Twenty fixture finalizers await
+  bounded native deletion retries and preserve errors from persistent locks.
+- Measured on the working tree at `7320803`, Node24.15.0: **571/571 tests**, no skips; all **36 source
+  modules** at or above 80% of lines (minimum 84.52%). Branches remain reported, not gated;
+  the lowest is ralph-loop-stop at 12.5%. Windows smoke **160/0/0**; **157 files** exported with
+  zero forbidden patterns, untranslated text or dead links. After the metadata update,
+  version and translation checks passed 19/19; smoke, settings and export passed again.
+
+Guard installation, MCP and bootstrap belong to 1.27.0. A real multi-turn run of the installed
+stack and user documentation belong to 1.28.0; the single-turn probe does not prove them.
+
+---
+
+## [v1.25.0] — 2026-10-05 — the final audit before a release, run through the code rather than read
+
+A whole-project audit in four directions. The two serious findings are in
+the two places that matter most, and both were found by running spellings and damaged states
+through the real code, not by reading it.
+
+- **Writing a blocker as a string did not stop the loop.** Writing a blocker is the documented way to
+  stop it, and the gate counted only arrays — `blockers: "it is broken"` read as "no blockers". A
+  damaged header (`blockers: [` never closed) reached the gate as the string `"["`, so a corrupted
+  STATE kept the loop running blind. Any non-empty value is now a blocker. Checked with the real
+  Stop hook on five damaged states.
+- **The guard let through spellings of the dangers it declares.** A force push as `+refspec`
+  (`git push origin +main`), `--mirror`, or with global options first (`git -C repo push -f`);
+  deleting home as `rm -fr ~/`; wiping a disk with `dd of=/dev/sda`. And one false refusal:
+  `--force-if-includes` alone, a no-op, matched the `--force` prefix. The rules are now stated at
+  the level of the danger, as v1.18.1 did for `taskkill`.
+- shellcheck warnings in `bootstrap.sh`; an API key value replaced in an internal document.
+- **Left open, named:** on Windows, `quoteWin` escapes a quote as `\"`, which `cmd.exe` does not
+  honour. The prompt travels through standard input in both engines, so the main path is closed;
+  fixing the rest needs a live Windows check.
+
+---
+
+## [v1.24.0] — 2026-10-05 — MCP servers work under OpenCode
+
+Measured with OpenCode 1.18.34 itself, before and after. The generator of `opencode.json` wrote
+every server from the manifest as `type: local` with `command: [s.command]`. A remote server has a
+URL and no command, so `github` and `sentry` came out as `command: [""]` and OpenCode refused them:
+*"The argument 'file' cannot be empty"*. Servers whose secret was absent were registered with an
+empty key and died on start. In a cloud container, 12 entries were written and half of them failed.
+
+- **Two transports.** A server with a URL (or `type: http` / `sse`) becomes
+  `{ type: "remote", url, headers }`. The shape was checked live against a local echo server: the
+  header arrived.
+- **A missing secret skips the server with the reason** (`telegram (secrets missing: …)`) instead of
+  registering it broken, and a rerun removes the broken entry an earlier provisioning left behind.
+  Entries the manifest does not name are left alone.
+- In a cloud session a remote server is pointed to a claude.ai connector, the same rule
+  `provision-toolset.sh` follows since 1.23.0. Result there: 5 servers, all connected.
+- **Decided in the open, not by default:** secrets are still written as values.
+  `{env:VAR}` references were tested and work, but the supervisor starts OpenCode with its own
+  environment and does not read `config/.env`, where keys live — references would resolve to
+  nothing. That is a separate change with a live check on a machine that has a model key.
+
+---
+
+## [v1.23.0] — 2026-10-05 — a cloud session is set up once
+
+- **`tools/cloud-setup.sh`**: a setup script for a Claude Code cloud environment. Paste it once and
+  every cloud session, whatever repository it opens, gets the framework, the audit CLIs and the
+  provisioned toolset. It always exits 0, because a failing setup script costs the whole session.
+- A maintainer guide to the cloud (account, environment and repository layers, which MCP servers to
+  connect and how, network policy, secrets, how the loop differs) lives in the development
+  repository; the script's own header carries what a user of the public tree needs.
+- **Fixed in `provision-toolset.sh`, found by the first cloud run:**
+  - Secrets were read only from `config/.env`. The process environment is now the base layer and the
+    file still wins, so cloud sessions, whose secrets arrive as variables, work.
+  - Servers pinned by `npm_package` ran from `${NPM_GLOBAL_ROOT}`, but nothing installed them or set
+    that variable. On any fresh machine five servers registered and then died with
+    `CONNECTION_CLOSED`. Provisioning now resolves `npm root -g` and installs what is absent.
+    Measured: all five went from failed to connected.
+- **Learned:**
+  - `go install` lands in `~/go/bin`, which a cloud session's PATH does not include, and an
+    `export PATH` inside the setup script dies with it. Go tools now go straight to `/usr/local/bin`.
+  - A remote MCP added as a manifest line is refused by the sandbox proxy (403). The same server as a
+    claude.ai connector works, because connectors do not leave from the container.
+
+**Verified by running it, and corrected by the merge audit.** The script ran
+in a cloud container from scratch: exit 0 in 3 min 21 s, five audit tools, six npm packages, five
+local MCP servers connected; a rerun refreshes the framework and installs nothing. Then:
+
+- **The export now refuses a dead link.** The published `CLAUDE_CODE_SETUP.md` pointed at the
+  internal cloud guide, and nothing checked relative links at all. `tools/export-public.mjs` stops on
+  a link to a file the public tree does not contain; on the whole tree there was exactly one — this one.
+- **The published script cloned the development repository by default**, which a reader of the
+  public tree cannot reach. The default is now `0-SOFT/0-CODE`.
+- In a cloud session a remote server from the manifest is no longer registered to fail with 403 in
+  every session; provisioning names the connector to use instead. On an ordinary machine nothing changes.
+- A pinned npm package found at another version is reinstalled instead of kept silently; the audit
+  tools are pinned to the versions the verified run installed; refreshing a private framework works.
+- **Learned:** in a cloud session the token log of v1.22.0 is written, but `docs/logs/` is ignored by
+  git and the machine is temporary, so the history goes with it — and no subscription share reaches
+  the status line there. Said in the guide rather than left to be discovered.
+
+---
+
+## [v1.22.0] — 2026-10-05 — the plan limit becomes a measured number
+
+A subscription states its limits as "N times Pro" and shows a percentage; a financial model cannot
+be built on either. Both halves of the missing number were already on disk — exact token counts in
+every transcript, and the plan share plus Claude Code's own list-price cost in the status line
+payload. Nothing was writing the second half down.
+
+- `core/token-usage.mjs` — the pure arithmetic: tokens per model, a plan-share snapshot, dollars per
+  1 % of a window, tokens per dollar at the project's real mix.
+- `hooks/save-session-log` now writes `…_<id>.usage.json` next to each log and a token table into the
+  summary. **What was learned:** a transcript repeats a response's `usage` once per content block —
+  2 to 4 copies measured on a live session — so summing lines overstates usage two- to four-fold. A
+  response is counted once by its id. Subagent transcripts are included; leaving them out made
+  delegation look free.
+- `hooks/usage-statusline` (registered in the project template) shows the 5-hour and weekly share and
+  records every change into `docs/logs/limits.jsonl`. A status line the person already had keeps
+  drawing the bar: bootstrap moves it into `USAGE_STATUSLINE_NEXT` instead of hiding it.
+- `node lib/token-report.mjs [--json]` — tokens per day and per model, and "one week of the plan ≈ N
+  dollars ≈ M tokens" once the share has moved 5+ points inside one window. The estimate errs low:
+  the share counts claude.ai chat and other machines, the spend does not.
+- The framework's own settings ran a stale copy of the session logger from `.claude/hooks/`; they now
+  run the canonical `hooks/save-session-log`, and the copy is gone.
+
+**Found by the merge audit and fixed before release** across four finding ledgers:
+
+- **Log rotation deleted the plan-share history.** `save-session-log` promised in a comment that
+  `limits.jsonl` is never rotated, and one line below ran `find docs/logs -name "*.jsonl" -mtime +30
+  -delete`, which matches it by name. A month without the share moving — a holiday, a paused project
+  — and the whole calibration history went with the next session end. Rotation now touches only the
+  dated subdirectories where session logs live (`-mindepth 2`). Reproduced before the fix; the new
+  smoke check is red on the old code.
+- **The capacity could err high.** A session already running when recording began (the day the
+  status line was installed) was counted as born inside the window, with days of earlier spend. The
+  report now passes each session's first-response time from its `.usage.json` to the calibration.
+- **Untested promises.** Moving a person's own status line into `USAGE_STATUSLINE_NEXT` had no test
+  on the bootstrap side; it has one now, checked to go red when the move is disabled.
+- The status line, which runs on every message, no longer loads the report CLI to learn a file name.
+
+**The translation guard of v1.21.0 met its first release** and reported all ten translations stale
+over a single changed digit — the version number in the header. Re-stamping ten markers per release
+would have made the one move the guard cannot see through into a routine. The number is now masked in
+the digest, and every translated header was checked against `plugin.json` exactly instead.
+The current check uses `VERSION` after plugin installation was removed in 2.0.0.
+
+**Also fixed:** three smoke checks of loop adoption failed on any machine fast enough: the scenario
+quieted the transcript of the session it named, while the lock was held by another session from an
+earlier scenario, and the hook rightly refused.
+
+Not yet proven: a live calibration on a real Max account (it needs a week of recorded history on the
+owner's machine; a cloud session receives no subscription `rate_limits`).
+
+---
+
+## [v1.21.0] — 2026-09-18 — the README learns ten languages, and a translation cannot fall behind quietly
+
+Ten translated READMEs — Chinese, Spanish, Brazilian Portuguese, Russian, Japanese, Korean, French,
+German, Hindi and Arabic — plus the thing without which they would have been a liability.
+
+### Why translations needed a mechanism and not just effort
+
+A translation is a copy of a claim with no expiry date. This project has spent three releases on
+exactly that shape of defect — v1.7.0, v1.14.0 and v1.16.0 were all a cached value drifting away
+from its source in silence. The English README changes every release. Ten copies of it would have
+drifted the same way, and the project would have ended up asserting different things in different
+languages without anyone inside it finding out.
+
+So each translation records the digest of the English README it was made from, and a smoke check
+turns red on any that still point at an older one. Verified by planting a divergence: the guard
+failed the run and named all ten files with the old and the new digest, and went green again when
+the change was reverted.
+
+**A digest rather than a version number**, because a version only moves at a release: a README
+corrected between releases would have drifted while every translation still claimed to be current.
+The digest moves whenever the text does, which is the question actually being asked.
+
+**What the guard deliberately does not do** is judge translation quality. A guard that graded prose
+would be unfalsifiable, and an unfalsifiable guard is the thing this project keeps finding in its
+own gates. It also cannot tell a re-stamped marker from real work. What it buys is narrow and real:
+drift cannot be *silent*. Somebody has to look.
+
+### The language gate stopped the export, and it was right
+
+Every README carries a table naming the other languages by their endonym — the name each language
+uses for itself, because a reader scans that list for their own word, not for an English one. One of
+those endonyms is written in the alphabet the publication gate forbids, and the gate stopped the
+export on all eleven files at once.
+
+The fix had to be narrow in a specific way. Excusing `README.md` by path would have dropped the
+check on the most important file in the tree, so the next untranslated paragraph landing there would
+have shipped in silence. Loosening the pattern would have been worse: this gate exists *because* a
+rule written against the form of a thing lets dangerous content through — that was the
+`.gitattributes` hole in v1.19.0.
+
+So the exception is a list of literals. The word is excused; the language is not. A sentence built
+around that word still stops the export, because its other words remain forbidden — pinned by a test,
+alongside one proving the same text still trips the gate when the list is empty, so the allowance
+cannot pass for the wrong reason. The cost is stated plainly: the gate weakens by exactly the length
+of that list, which is why the list must stay short and every entry explicable.
+
+### Honest about the translations themselves
+
+None of them was written or reviewed by a native speaker. They were checked for meaning, not for how
+they sound, and every file says so in its own language and invites a correction by pull request. An
+unannounced roughness reads as carelessness; an announced one reads as an invitation.
+
+### Gates
+
+488 tests (479 passed, 9 announced skips), smoke 134/0/6, 32 source modules at or above 80 % of
+lines, 136 files exported clean — all measured from the published tree run as a real git repository.
 
 ---
 

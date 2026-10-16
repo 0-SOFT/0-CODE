@@ -1,3 +1,4 @@
+import { cleanupTempDirSync } from '../helpers/index.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
@@ -152,6 +153,95 @@ test('the loop finishes only when every audit is clean', () => {
   assert.equal(all.blocking, 0);
 });
 
+test('a ledger requires an explicit version instead of agreeing on missing metadata', () => {
+  for (const version of [undefined, null, '', '   ', 127, []]) {
+    const result = validateLedger(ledger({ version, findings: [] }));
+    assert.equal(result.ok, false, 'version ' + JSON.stringify(version));
+    assert.match(result.problems.join(' '), /version must be a nonempty string/);
+  }
+});
+
+test('a ledger requires a positive integer round that can be compared exactly', () => {
+  for (const round of [undefined, null, 0, -1, 1.5, '1', NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    const result = validateLedger(ledger({ round, findings: [] }));
+    assert.equal(result.ok, false, 'round ' + String(round));
+    assert.match(result.problems.join(' '), /round must be a positive safe integer/);
+  }
+});
+
+test('clean directions from different versions cannot complete one audit loop', () => {
+  const clean = AUDIT_KINDS.map(audit => ledger({ audit, version: '1.28.0', round: 2, findings: [] }));
+  clean[0].version = '1.27.0';
+  assert.ok(clean.every(value => validateLedger(value).ok));
+  const result = loopVerdict(clean);
+  assert.equal(result.done, false);
+  assert.equal(result.blocking, 0);
+  assert.deepEqual(result.missing, []);
+  assert.match(result.why, /different versions/);
+  assert.match(result.why, /architecture="1\.27\.0"/);
+  assert.match(result.why, /tests="1\.28\.0"/);
+});
+
+test('clean directions from different rounds cannot complete one audit loop', () => {
+  const clean = AUDIT_KINDS.map(audit => ledger({ audit, version: '1.28.0', round: 2, findings: [] }));
+  clean[3].round = 1;
+  assert.ok(clean.every(value => validateLedger(value).ok));
+  const result = loopVerdict(clean);
+  assert.equal(result.done, false);
+  assert.equal(result.blocking, 0);
+  assert.deepEqual(result.missing, []);
+  assert.match(result.why, /different rounds/);
+  assert.match(result.why, /architecture=2/);
+  assert.match(result.why, /tests=1/);
+});
+
+test('four clean ledgers without version or round cannot pass by matching undefined', () => {
+  for (const field of ['version', 'round']) {
+    const clean = AUDIT_KINDS.map(audit => ledger({ audit, findings: [] }));
+    clean.forEach(value => { delete value[field]; });
+    const result = loopVerdict(clean);
+    assert.equal(result.done, false, field);
+    assert.match(result.why, new RegExp(field));
+  }
+});
+
+test('four valid clean directions with the same version and round still complete the loop', () => {
+  const clean = AUDIT_KINDS.map(audit => ledger({ audit, version: '1.28.0', round: 7, findings: [] }));
+  const result = loopVerdict(clean);
+  assert.equal(result.done, true);
+  assert.equal(result.blocking, 0);
+  assert.deepEqual(result.missing, []);
+  assert.deepEqual(result.unclean, []);
+});
+
+test('a repeated direction cannot hide an open finding regardless of ledger order', () => {
+  const clean = AUDIT_KINDS.map(audit => ledger({ audit, findings: [] }));
+  const open = ledger({ audit: 'architecture', findings: [finding({ id: 'P2-001', level: 'P2' })] });
+  for (const supplied of [[open, ...clean], [...clean, open]]) {
+    const result = loopVerdict(supplied);
+    assert.equal(result.done, false);
+    assert.equal(result.blocking, 1, 'the open P2 survives a later clean copy');
+    assert.match(result.why, /architecture: more than one ledger/);
+  }
+});
+
+test('a repeated clean direction is refused instead of selecting one ledger arbitrarily', () => {
+  const clean = AUDIT_KINDS.map(audit => ledger({ audit, findings: [] }));
+  const result = loopVerdict([...clean, { ...clean[0] }]);
+  assert.equal(result.done, false);
+  assert.equal(result.blocking, 0);
+  assert.match(result.why, /architecture: more than one ledger/);
+});
+
+test('an extra invalid direction cannot be silently ignored beside four clean ledgers', () => {
+  const clean = AUDIT_KINDS.map(audit => ledger({ audit, findings: [] }));
+  for (const extra of [ledger({ audit: 'unknown', findings: [] }), {}]) {
+    const result = loopVerdict([...clean, extra]);
+    assert.equal(result.done, false);
+    assert.match(result.why, /not valid/);
+  }
+});
+
 test('a missing audit is not a clean audit', () => {
   const v = loopVerdict([ledger({ audit: 'codebase', findings: [] })]);
   assert.equal(v.done, false, 'three of the four kinds never ran');
@@ -196,7 +286,7 @@ test('parseLedger reads the frontmatter of a todo file and ignores the prose bel
     assert.equal(l.findings.length, 1);
     assert.equal(validateLedger(l).ok, true);
     assert.equal(countFindings(l).blocking, 1);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { cleanupTempDirSync(dir); }
 });
 
 // A todo file from before this version has no frontmatter at all. It must read as "no ledger", and
@@ -208,5 +298,5 @@ test('a todo file without a ledger is not an empty ledger', () => {
     writeFileSync(file, '# TODO\n\n- [ ] **P0-001** something\n', 'utf8');
     assert.equal(parseLedger(file), null);
     assert.equal(loopVerdict([null]).done, false);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { cleanupTempDirSync(dir); }
 });

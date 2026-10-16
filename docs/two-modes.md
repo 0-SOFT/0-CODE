@@ -12,12 +12,17 @@ limit was measured, not assumed.
 
 ## The short answer
 
+Engine settings and the common guard contract are listed in [ENGINE_SETTINGS.md](ENGINE_SETTINGS.md).
+Temporary network failures have unlimited retries by default, including the startup probe;
+invalid credentials/model/protocol stop immediately. The retry count is an explicit setting.
+
 **Use the Stop hook** when you are at the keyboard, want to watch the work, and might interrupt it.
 That is the default, and it is what `bootstrap.sh` installs.
 
 **Use the supervisor** when the run must survive things the hook cannot survive: a network outage, a
-crashed engine, a budget that has to be enforced. It is the only mode where the spending cap works
-at all.
+crashed engine, or a budget that has to be enforced by an engine reporting USD. The spending cap
+works only under the supervisor with those engines. Codex reports tokens and refuses a positive
+`budget_metrics.cap_usd` before work starts; use `max_iterations` to bound its turns.
 
 ---
 
@@ -29,8 +34,8 @@ at all.
 | **How to start** | Nothing to start. Open Claude Code in the project. | `node core/supervisor.mjs --state docs/STATE.md` |
 | **How to stop** | Write a blocker into `docs/STATE.md`, or let a gate fire. | The same, plus Ctrl+C — it releases the lock and kills its engine processes on the way out. |
 | **Survives a platform outage** | **No, by construction.** The hook lives inside the process that is dying; when the platform is unreachable there is nobody left to run a turn. Six such failures appeared in one real session. | **Yes.** Transient failures are retried with a growing pause (`core/turn-retry.mjs`, v1.5.0); real errors still stop at once, because repeating them only burns budget. |
-| **Enforces a spending cap** | **No.** `budget_metrics.cap_usd` is compared against `version_cost_usd`, and nothing on this driver writes that field: the Stop payload carries a transcript path, and the transcript (1313 records, 12 record types, checked in v1.9.0) has no cost field at all. The loop says so in every continuation rather than letting the cap look like a guard. | **Yes.** The engine returns the cost of each turn, the supervisor accumulates it, and the gate can fire. This is the only reason to choose this mode if money is the constraint. |
-| **Remembers the previous turn** | **Yes.** It is one session; the conversation continues. | **No.** Every turn is a fresh engine invocation, so everything worth remembering must be in `docs/STATE.md`. This is the mode's real price — pay attention to it before choosing. |
+| **Enforces a spending cap** | **No.** `budget_metrics.cap_usd` is compared against `version_cost_usd`, and nothing on this driver writes that field: the Stop payload carries a transcript path, and the transcript (1313 records, 12 record types, checked in v1.9.0) has no cost field at all. The loop says so in every continuation rather than letting the cap look like a guard. | **Yes, for engines reporting USD.** The supervisor accumulates their reported cost and the gate can fire. Codex reports tokens without USD and refuses a positive `budget_metrics.cap_usd` before work starts; use `max_iterations` for a turn limit. |
+| **Remembers the previous turn** | **Yes.** It is one session; the conversation continues. | **No, in the default supervisor loop.** It does not pass a previous engine session id to working turns, so everything worth remembering must be in `docs/STATE.md`. The Codex adapter separately supports explicit resume by `sessionId`; the supervisor does not select a thread automatically. |
 | **Counts empty turns** | Yes. | Yes, **the same way, from the same file**: since v1.15.0 both drivers use `core/turn-progress.mjs`, so a run that is stopped and resumed keeps its count. Before that the supervisor kept it in a variable and a restart reset it to zero, so the blocker could never arrive. |
 | **Warns about secrets in a commit** | Yes (v1.8.0). | Yes (v1.5.0). Neither blocks: informing is the job, obstructing is not. |
 | **Can you talk to it mid-run** | Yes — it is your session. | No. Send it work by editing `docs/STATE.md`. |

@@ -22,6 +22,55 @@ test('runLoop: N continued iterations → iteration grows and the backend is cal
   } finally { p.cleanup(); }
 });
 
+test('runLoop: each of five working prompts names the iteration actually readable in STATE', async () => {
+  const p = mkTempProject({ current_version: '1', iteration: 0, max_iterations: 5,
+    roadmap_review_every: 0, next_step_prompt: 'Execute the task for the iteration in STATE.' });
+  const visited = [];
+  const notificationEnv = Object.fromEntries(['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'].map(key => [key, process.env[key]]));
+  delete process.env.TELEGRAM_BOT_TOKEN; delete process.env.TELEGRAM_CHAT_ID;
+  try {
+    const stub = stubBackend(({ prompt }) => {
+      const state = readFrontmatter(p.stateFile);
+      const shown = Number(prompt.match(/\| iteration: (\d+)\/5 \|/)[1]);
+      assert.equal(shown, state.iteration, 'machine truth must equal the file before the work starts');
+      visited.push(shown);
+      writeFileSync(p.stateFile, readFileSync(p.stateFile, 'utf8') + `\n- task ${shown} done`);
+      return { ok: true, output: 'done' };
+    });
+    const result = await runLoop({ stateFile: p.stateFile, backend: stub, maxLoops: 6,
+      sessionId: 's', usePreflight: false, useLock: false });
+    assert.deepEqual(visited, [0, 1, 2, 3, 4], 'the first task is not skipped and none are shifted');
+    assert.equal(result.stopped, 'iteration_cap');
+    assert.equal(result.loops, 5);
+    assert.equal(readFrontmatter(p.stateFile).iteration, 5);
+  } finally {
+    for (const [key, value] of Object.entries(notificationEnv)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    p.cleanup();
+  }
+});
+
+test('runLoop: a retried working turn keeps its STATE iteration and matching header until success', async () => {
+  const p = mkTempProject({ current_version: '1', iteration: 0, max_iterations: 5,
+    roadmap_review_every: 0, next_step_prompt: 'Execute the current task.' });
+  const observed = [];
+  try {
+    const stub = stubBackend(({ prompt }, attempt) => {
+      const state = readFrontmatter(p.stateFile);
+      const shown = Number(prompt.match(/\| iteration: (\d+)\/5 \|/)[1]);
+      assert.equal(shown, state.iteration, 'a failed attempt must not consume or rename the task');
+      observed.push(shown);
+      return attempt === 1 ? { ok: false, error: 'HTTP 503 Service Unavailable' } : { ok: true, output: 'done' };
+    });
+    const result = await runLoop({ stateFile: p.stateFile, backend: stub, maxLoops: 1,
+      sessionId: 's', usePreflight: false, useLock: false, sleep: async () => {} });
+    assert.deepEqual(observed, [0, 0]);
+    assert.equal(result.loops, 1);
+    assert.equal(readFrontmatter(p.stateFile).iteration, 1);
+  } finally { p.cleanup(); }
+});
+
 test('runLoop: turn_failed → stop', async () => {
   const p = mkTempProject({ current_version: '1', iteration: 0, max_iterations: 60, next_step_prompt: 'go' });
   const stub = stubBackend(() => ({ ok: false, error: 'boom' }));
@@ -121,19 +170,18 @@ test('runLoop: dry run → STATE is untouched and the backend is not called', as
   } finally { p.cleanup(); }
 });
 
-// v1.3.0: without an explicit --model the supervisor MUST pick a model through routing. It used to
-// pass none at all, the engine fell back to its own default and the turn failed with a vague error.
-test('runLoop: the model comes from routing when not set explicitly', async () => {
+// v1.30: an unset route leaves model selection to the engine's own configuration.
+test('runLoop: an unset model and route preserve the engine own configuration', async () => {
   const p = mkTempProject({ current_version: '1', released_version: '0', iteration: 0,
     max_iterations: 1, next_step_prompt: 'do X' });
   try {
     const seen = [];
-    const stub = { id: 'opencode',
+    const stub = { id: 'opencode', env: {},
       async runTurn({ model }) { seen.push(model); return { ok: true, output: 'done' }; },
       guardCommand: () => null };
     await runLoop({ stateFile: p.stateFile, cwd: p.dir, backend: stub, maxLoops: 1, usePreflight: false });
     assert.equal(seen.length, 1);
-    assert.match(seen[0], /kimi/, 'the opencode backend is expected to use a model from the Kimi preset');
+    assert.equal(seen[0], undefined, 'an unset flag must not override the engine configuration');
   } finally { p.cleanup(); }
 });
 
@@ -142,7 +190,7 @@ test('runLoop: an explicit model outranks routing', async () => {
     max_iterations: 1, next_step_prompt: 'do X' });
   try {
     const seen = [];
-    const stub = { id: 'opencode',
+    const stub = { id: 'opencode', env: { OPENROUTER_MODEL_MID: 'routed/model' },
       async runTurn({ model }) { seen.push(model); return { ok: true, output: 'done' }; },
       guardCommand: () => null };
     await runLoop({ stateFile: p.stateFile, cwd: p.dir, backend: stub, maxLoops: 1, model: 'own/model' });
@@ -280,6 +328,7 @@ test('runLoop: a transient failure that outlives every retry stops the loop hone
     const r = await runLoop({
       stateFile: p.stateFile, backend: stub, maxLoops: 5, sessionId: 's', usePreflight: false,
       sleep: async () => {}, retryBackoff: { baseMs: 1, maxMs: 2 },
+      networkRetries: 4,
     });
     assert.equal(r.stopped, 'turn_failed');
     assert.equal(r.failureKind, 'transient');
@@ -453,6 +502,15 @@ test('an option that asks for a limit never silently becomes no limit', async ()
   for (const flag of ['--state', '--model', '--backend']) {
     assert.ok(parseArgs([flag]).error, `${flag} with no value must be refused`);
   }
+});
+
+test('--max checks the entire value and refuses rounding beyond the safe integer range', async () => {
+  const { parseArgs } = await import('../../core/supervisor.mjs');
+  for (const value of ['5oops', '5.9', '9007199254740993', '1e3', ' 5 ', '+5', 'Infinity']) {
+    assert.ok(parseArgs(['--max', value]).error, 'must refuse the whole invalid value: ' + value);
+  }
+  assert.equal(parseArgs(['--max', '9007199254740991']).maxLoops, Number.MAX_SAFE_INTEGER);
+  assert.equal(parseArgs(['--max', '005']).maxLoops, 5);
 });
 
 // DEFECT 6 — WHERE THE ENGINE RUNS, found the hard way rather than by measurement. `cwd` defaulted

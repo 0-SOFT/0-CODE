@@ -12,6 +12,16 @@ const GH = 'ghp_' + 'A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8';
 const ANTHROPIC = 'sk-ant-' + 'api03' + '-' + 'Zq7'.repeat(8);
 const AWS = 'AKIA' + 'QWERTYUIOPASDFGH';
 
+test('complete credential shapes stay visible beside example labels, comments and variable references', () => {
+  for (const text of [`exampleClient=${GH}`, `TOKEN=${GH} # example`, `TOKEN=${GH} NEXT=\${SOME_VAR}`]) {
+    assert.equal(findSecrets(text).length, 1);
+  }
+  const masked = 'ghp_' + 'x'.repeat(36);
+  const found = findSecrets(`first=${masked} second=${GH}`);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].match, GH);
+});
+
 test('patterns: each shape is recognised', () => {
   for (const [label, sample] of [['GitHub', GH], ['Anthropic', ANTHROPIC], ['AWS', AWS]]) {
     assert.equal(findSecrets(`token=${sample}`).length, 1, `${label} not recognised`);
@@ -24,19 +34,18 @@ test('patterns: a prefix without a payload is not a credential', () => {
   assert.deepEqual(findSecrets('nothing to see here'), []);
 });
 
-test('placeholder: documentation and templates do not raise an alarm', () => {
+test('placeholder: incomplete or explicitly masked values do not raise an alarm', () => {
   for (const line of [
     `GITHUB_TOKEN=\${GITHUB_TOKEN}`,
-    `token: your_token_here ${GH}`,
-    `# example: ${GH}`,
     `masked in the report: ghp_A1B2***`,
     // Built at runtime, not written out: the release gate scans tracked files for credential
     // shapes and has no placeholder exemption, so even a masked literal would block the export.
     `GITHUB_TOKEN=ghp_${'x'.repeat(36)}`,
   ]) {
     assert.deepEqual(findSecrets(line), [], `should have been treated as a placeholder: ${line}`);
-    assert.ok(PLACEHOLDER.test(line));
   }
+  assert.ok(PLACEHOLDER.test('ghp_' + 'x'.repeat(36)));
+  assert.equal(PLACEHOLDER.test(GH), false);
 });
 
 test('findSecrets: reports the line number and the pattern name', () => {

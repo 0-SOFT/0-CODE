@@ -1,24 +1,27 @@
 // core/backends/Backend.mjs — the execution backend contract (a port, Dependency Inversion).
 //
 // v0.8.0, Phase 1. The core (supervisor and gates) depends on THIS interface, not on a concrete
-// CLI. Adapters: backends/claude.mjs (Claude Code/CLI), backends/opencode.mjs (OpenCode/OpenRouter).
+// CLI. Adapters: claude.mjs (Claude Code), opencode.mjs (OpenCode), codex.mjs (Codex CLI).
 //
 // The base class defines the shape and forces an adapter to implement every method — so a missing
 // piece surfaces as an explicit error instead of a silent failure. Each method documents its
 // input/output contract.
 
 export class Backend {
-  /** @type {string} stable backend identifier ('claude' | 'opencode') */
+  /** @type {string} stable backend identifier ('claude' | 'opencode' | 'codex') */
   get id() { throw new Error('Backend.id must be overridden'); }
 
   /**
    * Run one agent "turn" (one task taken from next_step_prompt).
    * Headless execution options (v1.1.0; an adapter may ignore the ones that do not apply):
    *   permissionMode — permission mode ('bypassPermissions' by default for claude; 'none' to omit);
-   *   strictMcp      — do not load project MCP servers (default true for claude);
+   *   strictMcp      — restrict MCP to explicit config only when requested;
+   *   effort         — engine-specific reasoning level, omitted when unset;
+   *   timeoutMs / idleTimeoutMs — shared operational settings from engine-settings;
    *   maxBudgetUsd   — spending guard for a single turn.
-   * @param {{prompt:string, cwd?:string, model?:string, permissionMode?:string, strictMcp?:boolean, maxBudgetUsd?:number}} _opts
-   * @returns {Promise<{ok:boolean, output:string, sessionId?:string, costUsd?:number, raw?:any, error?:string}>}
+   * sessionId — an explicit thread to resume (Codex); usage is its per-turn token delta.
+   * @param {{prompt:string, cwd?:string, model?:string, sessionId?:string, permissionMode?:string, strictMcp?:boolean, maxBudgetUsd?:number}} _opts
+   * @returns {Promise<{ok:boolean, output:string, sessionId?:string, costUsd?:number, usage?:object, raw?:any, error?:string}>}
    */
   async runTurn(_opts) { throw new Error(`${this.id}: runTurn() not implemented`); }
 

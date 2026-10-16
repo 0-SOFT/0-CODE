@@ -22,10 +22,9 @@ test('policy: the mode is set explicitly and can be overridden', () => {
 
 // v1.2.1: the denial list is a safety net for the case where the hook never runs, so it holds
 // only unrecoverable cases where a glob cannot be wrong. Subtle decisions belong to the detector.
-test('policy: deny holds only machine destruction and shared-history rewrites', () => {
+test('policy: the shared guard owns denials so confirmations and allow-all are not overridden', () => {
   const deny = buildPermissionsBlock().deny;
-  for (const rule of ['Bash(rm -rf /)', 'Bash(rm -rf ~)', 'Bash(git push --force*)'])
-    assert.ok(deny.includes(rule), `deny must contain: ${rule}`);
+  assert.deepEqual(deny, []);
 });
 
 test('policy: deny holds NO globs for routine operations (they would cause false refusals)', () => {

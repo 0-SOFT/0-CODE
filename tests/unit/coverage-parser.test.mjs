@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   coverageRows, sourceRows, missingSourceDirs, worstBranch, EXPECTED_SOURCE_DIRS,
 } from '../coverage-report.mjs';
@@ -10,6 +11,16 @@ import {
 // possible; the vacuity guard in the runner is the second line of defence, not the first.
 
 const SEP = String.fromCharCode(92);   // a backslash, without writing one into a string literal
+
+test('Node 24 spec reporter: recorded coverage is measured rather than matched as zero modules', () => {
+  const table = readFileSync(new URL('../fixtures/node24-coverage.txt', import.meta.url), 'utf8');
+  const rows = sourceRows(coverageRows(table));
+  assert.equal(rows.length, 36);
+  assert.deepEqual(missingSourceDirs(rows), []);
+  const codex = rows.find(r => r.file === 'core/backends/codex.mjs');
+  assert.equal(codex.line, 98.67);
+  assert.equal(codex.branch, 95.36);
+});
 
 const FLAT = [
   '# file                        | line % | branch % | funcs % | uncovered',

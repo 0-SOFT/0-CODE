@@ -48,6 +48,12 @@ function loadEnv(files) {
   return env;
 }
 
+// A skipped server with its reason: "telegram (secrets missing: TELEGRAM_API_ID)" says what to do,
+// a bare name does not.
+function describeSkipped(names, reasons = {}) {
+  return names.map(n => (reasons[n] ? `${n} (${reasons[n]})` : n)).join(', ') || '(none)';
+}
+
 async function main() {
   const opt = parseArgs(process.argv.slice(2));
   // A freshly cloned repository has no personal manifest — only the example. Falling back to it
@@ -69,13 +75,13 @@ async function main() {
 
   if (opt.dryRun) {
     const { permission, dropped } = toOpenCodePermissions(policy);
-    const { mcp, skipped } = generateOpenCodeMcp(manifest, env);
+    const { mcp, skipped, reasons } = generateOpenCodeMcp(manifest, env);
     const denials = Object.entries(permission.bash).filter(([, v]) => v === 'deny').length;
     console.log('[dry-run] target:', opt.target);
     console.log('[dry-run] ' + OPENCODE_CONFIG_FILE + ': bash denials =', denials,
       '| lost in translation =', dropped.length);
     console.log('[dry-run] MCP servers to register:', Object.keys(mcp).join(', ') || '(none)');
-    console.log('[dry-run] MCP servers skipped:', skipped.join(', ') || '(none)');
+    console.log('[dry-run] MCP servers skipped:', describeSkipped(skipped, reasons));
     console.log('[dry-run] AGENTS.md ←', join(ROOT, 'CLAUDE.md'));
     console.log('[dry-run] arbiter plugin (main line of defence):', join(globalPluginDir(), 'safety-guard.js'));
     console.log('[dry-run] arbiter plugin (copy inside the project):', OPENCODE_PLUGIN_FILE);
@@ -90,7 +96,7 @@ async function main() {
 
   const mcp = await backend.registerMcp(manifest, env, { targetDir: opt.target });
   console.log('  MCP:', mcp.registered.join(', ') || '(none)');
-  console.log('  MCP skipped:', mcp.skipped.join(', ') || '(none)');
+  console.log('  MCP skipped:', describeSkipped(mcp.skipped, mcp.reasons));
 
   // The instructions must describe the TARGET project, not this framework. Provisioning used to
   // read the framework's own CLAUDE.md unconditionally, so every OpenCode project was handed
@@ -113,10 +119,9 @@ async function main() {
   const globalPath = join(globalPluginDir(), 'safety-guard.js');
   console.log('  Arbiter plugin (main line of defence):', globalPath);
   console.log('  Arbiter plugin (copy inside the project):', join(opt.target, OPENCODE_PLUGIN_FILE));
-  console.log('  OK Protection is ACTIVE and beyond the agent reach: the main plugin lives OUTSIDE');
-  console.log('     the working directory. The v1.4.0 audit showed the agent deletes the in-project');
-  console.log('     copy and rewrites permissions to "allow" — the global line of defence survives');
-  console.log('     that and keeps blocking (verified by live experiment).');
+  console.log('  OK Guard files installed: the main plugin and detector snapshot live outside the project.');
+  console.log('     The supervisor restores trusted bytes before each turn, including modified files.');
+  console.log('     This survives project cleanup; a separate directory does not restrict full OS access.');
   console.log('     The rules are shared with the Claude Code backend (core/safety.mjs).');
 }
 

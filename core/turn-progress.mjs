@@ -40,14 +40,29 @@ export const MEMORY_FILENAME = '.loop-progress';
 // is worth saying something about, because the cheapest possible answer (tell the agent) might fix
 // it. Three means the cheapest answer was tried and did not work, so continuing costs money to
 // produce nothing.
-export const ESCALATE_AFTER = 2;
 export const BLOCK_AFTER = 3;
+export const ESCALATE_AFTER = BLOCK_AFTER - 1;
+
+// Both drivers consult this policy; 0 disables the no-progress stop and its escalation.
+// Invalid settings keep the documented default and produce a visible diagnosis.
+export function progressPolicy(state = {}) {
+  const value = state?.no_progress_after;
+  let threshold = BLOCK_AFTER, warning;
+  if (value !== undefined && value !== null) {
+    const numeric = typeof value === 'number' || (typeof value === 'string' && /^\d+$/.test(value));
+    if (numeric && Number.isSafeInteger(Number(value)) && Number(value) >= 0) threshold = Number(value);
+    else warning = 'no_progress_after needs a nonnegative whole number; using the default 3';
+  }
+  return { enabled: threshold !== 0, blockAfter: threshold || Infinity,
+    escalateAfter: threshold ? Math.max(1, threshold - 1) : Infinity,
+    ...(warning ? { warning } : {}) };
+}
 
 // The blocker both drivers record, so that its type and wording cannot drift apart either.
 export function noProgressBlocker(stagnantTurns, at = new Date().toISOString()) {
   return {
     type: 'no_progress',
-    detail: `${stagnantTurns} consecutive turns without measurable progress (git and STATE unchanged), escalation did not help`,
+    detail: `${stagnantTurns} consecutive turns without measurable progress (git and STATE unchanged), configured threshold reached`,
     at,
   };
 }

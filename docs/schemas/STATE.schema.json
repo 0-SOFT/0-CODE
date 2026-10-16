@@ -79,7 +79,7 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["missing_resource", "ambiguity", "stuck", "budget_exceeded", "manual_request", "other"]
+            "enum": ["missing_resource", "ambiguity", "stuck", "no_progress", "budget_exceeded", "manual_request", "other"]
           },
           "what": { "type": "string" },
           "required_by": { "type": "string" },
@@ -112,6 +112,11 @@
       "exclusiveMinimum": 0,
       "description": "How long docs/STATE.md may stay untouched before the continuation text warns the agent about it (v1.8.0). Default 20 when absent. This is a WARNING and never a stop: a false stop costs more than a false warning, because the loop exists to run without a human."
     },
+    "no_progress_after": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Consecutive measured turns without progress before no_progress stops either driver. Default 3 when absent or null; 0 disables the stop and escalation. A positive number changes the threshold, with escalation one turn earlier. The Stop hook establishes its first baseline separately. Invalid values are diagnosed and fall back to 3."
+    },
     "attempts_per_task": {
       "type": "object",
       "description": "DEAD FIELD, kept only so existing projects still validate (v1.11.0). It was meant to drive a three-strikes blocker; that mechanism was never implemented, and v1.11.0 removed the promise rather than building it — both halves of the idea are invisible to a driver, which sees change or no change, never a task or a failure. Nothing reads this field. New projects are no longer created with it.",
@@ -137,8 +142,8 @@
     "budget_metrics": {
       "type": "object",
       "properties": {
-        "version_cost_usd": { "type": "number", "minimum": 0, "description": "Spend accumulated for the current version. Written by core/supervisor.mjs only, which gets the turn cost back from the engine. The Stop hook cannot write it: the Stop payload carries a transcript path, and the transcript holds token counts but no cost field. So under the Stop hook this stays at 0 and cap_usd cannot fire — the loop reports that rather than pretending to guard." },
-        "cap_usd": { "type": ["number", "null"], "minimum": 0, "description": "Spending cap for the current version. Opt-in: absent, null or 0 mean no cap, and a fresh project is created without one. Enforced only where version_cost_usd is actually written (the supervisor)." }
+        "version_cost_usd": { "type": "number", "minimum": 0, "description": "Spend accumulated for the current version from engines reporting USD. Written by core/supervisor.mjs from their reported turn cost. Codex reports tokens without USD and does not populate this counter. The Stop hook cannot write it: the Stop payload carries a transcript path, and the transcript holds token counts but no cost field. So under the Stop hook this stays at 0 and cap_usd cannot fire — the loop reports that rather than pretending to guard." },
+        "cap_usd": { "type": ["number", "null"], "minimum": 0, "description": "Spending cap for the current version. Opt-in: absent, null or 0 mean no cap, and a fresh project is created without one. Enforced only by the supervisor with engines reporting USD. Codex refuses a positive cap before work starts because it reports tokens without USD; use max_iterations to bound Codex turns." }
       }
     },
     "released_version": {

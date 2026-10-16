@@ -1,3 +1,4 @@
+import { cleanupTempDirSync } from '../helpers/index.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -30,6 +31,11 @@ test('ralph-loop-stop: continue → decision:block and iteration increment', () 
     assert.match(r.stdout, /"decision":"block"/);
     assert.match(r.stdout, /do X/);
     assert.equal(readFrontmatter(p.stateFile).iteration, 1);   // behaviour: the counter grew
+    const continuation = JSON.parse(r.stdout);
+    const iteration = readFrontmatter(p.stateFile).iteration;
+    assert.match(continuation.reason, new RegExp(`iteration: ${iteration}/60 \\|`),
+      'the Stop hook has already written the iteration before its continuation is delivered');
+    assert.match(continuation.systemMessage, new RegExp(`iter ${iteration}/60`));
   } finally { p.cleanup(); }
 });
 
@@ -50,7 +56,7 @@ test('ralph-loop-stop: fail open when STATE is missing (exit 0)', () => {
     const r = run(STOP_HOOK, { session_id: 'live' }, { CLAUDE_PROJECT_DIR: empty });
     assert.equal(r.status, 0);
     assert.doesNotMatch(r.stdout, /"decision":"block"/);
-  } finally { rmSync(empty, { recursive: true, force: true }); }
+  } finally { cleanupTempDirSync(empty); }
 });
 
 test('ralph-loop-stop: fail open when STATE has no frontmatter (exit 0)', () => {
@@ -60,10 +66,35 @@ test('ralph-loop-stop: fail open when STATE has no frontmatter (exit 0)', () => 
   try {
     const r = run(STOP_HOOK, { session_id: 'live' }, { CLAUDE_PROJECT_DIR: d });
     assert.equal(r.status, 0);
-  } finally { rmSync(d, { recursive: true, force: true }); }
+  } finally { cleanupTempDirSync(d); }
 });
 
 // --- safety-guard ---
+
+test('ralph-loop-stop: configured no_progress thresholds and zero use real state across invocations', () => {
+  for (const threshold of [0, 1, 2, 5]) {
+    const p = mkTempProject({ no_progress_after: threshold, current_version: '1', max_iterations: 60,
+      roadmap_review_every: 0, next_step_prompt: 'do X' },
+      { baseDir: process.env.FRAMEWORK_TEST_TMPDIR || tmpdir() });
+    try {
+      const calls = threshold === 0 ? 7 : threshold + 1; // The first call establishes the hook baseline.
+      for (let i = 0; i < calls; i++) {
+        const result = run(STOP_HOOK, { session_id: `threshold-${threshold}` },
+          { CLAUDE_PROJECT_DIR: p.dir, TELEGRAM_BOT_TOKEN: '', TELEGRAM_CHAT_ID: '' });
+        assert.equal(result.status, 0, result.stderr);
+        if (threshold > 0 && i === threshold) {
+          assert.equal(result.stdout, '');
+          assert.equal(readFrontmatter(p.stateFile).blockers[0]?.type, 'no_progress');
+        } else {
+          assert.equal(JSON.parse(result.stdout).decision, 'block');
+          assert.equal(readFrontmatter(p.stateFile).blockers.length, 0);
+          if (threshold === 0) assert.doesNotMatch(result.stdout, /SUPERVISOR ESCALATION/);
+        }
+      }
+      assert.equal(readFrontmatter(p.stateFile).iteration, calls);
+    } finally { p.cleanup(); }
+  }
+});
 
 test('safety-guard: destructive → permissionDecision:deny, exit 0', () => {
   const r = run(SAFETY_HOOK, { tool_name: 'Bash', tool_input: { command: 'git push --force' } });

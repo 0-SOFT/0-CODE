@@ -32,14 +32,30 @@ export const KIMI_PRESET = {
   smoke: 'cohere/north-mini-code:free',   // free — smoke checks at no cost
 };
 
-// Preset by backend id: OpenCode has its own models, everything else keeps the original set.
+// The small 1.26 probe did not predict multi-turn execution: two 1.28 acceptance runs
+// on luna/low failed to repair the source. Execution and explicitly easy work have
+// separate defaults; the 1.28 decision records the comparison and its limits.
+export const CODEX_EXECUTION_PRESET = Object.freeze({ model: 'gpt-6.1-sol' });
+export const CODEX_LIGHT_PRESET = Object.freeze({ model: 'gpt-6-luna' });
+export const CODEX_PRESET = {
+  high: CODEX_EXECUTION_PRESET.model, mid: CODEX_EXECUTION_PRESET.model,
+  low: CODEX_LIGHT_PRESET.model, smoke: CODEX_LIGHT_PRESET.model,
+};
+
+// Compatibility helper for an explicitly selected named model; never supplies engine defaults.
+export function codexTurnPreset(model) {
+  return model ? { model } : {};
+}
+
+// Only configured routes override the engine. Named presets above are opt-in choices.
+// Model variable names are scoped to the provider; OpenRouter settings must not select a Codex model.
 export function presetForBackend(backendId, env = process.env) {
-  const base = backendId === 'opencode' ? KIMI_PRESET : OPENROUTER_PRESET;
+  const prefix = backendId === 'codex' ? 'CODEX_MODEL_' : 'OPENROUTER_MODEL_';
   return {
-    high: env.OPENROUTER_MODEL_HIGH || base.high,
-    mid: env.OPENROUTER_MODEL_MID || base.mid,
-    low: env.OPENROUTER_MODEL_LOW || base.low,
-    smoke: env.OPENROUTER_MODEL_SMOKE || base.smoke,
+    high: env[`${prefix}HIGH`] || undefined,
+    mid: env[`${prefix}MID`] || undefined,
+    low: env[`${prefix}LOW`] || undefined,
+    smoke: env[`${prefix}SMOKE`] || undefined,
   };
 }
 

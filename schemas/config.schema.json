@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "0-CODE project configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "framework_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$" },
+    "engines": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["claude", "codex", "opencode"] } },
+    "language": { "type": "string", "pattern": "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$" },
+    "documents": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "state": { "$ref": "#/$defs/fileRole" },
+        "roadmap": { "$ref": "#/$defs/fileRole" },
+        "reports": { "$ref": "#/$defs/directoryRole" },
+        "decisions": { "$ref": "#/$defs/directoryRole" },
+        "todo": { "$ref": "#/$defs/directoryRole" },
+        "logs": { "$ref": "#/$defs/directoryRole" },
+        "prompts": { "$ref": "#/$defs/directoryRole" },
+        "templates": { "$ref": "#/$defs/directoryRole" },
+        "userdocs": { "$ref": "#/$defs/directoryRole" }
+      }
+    },
+    "modules": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "audits": { "type": "boolean" },
+        "session_logs": { "type": "boolean" },
+        "token_usage": { "type": "boolean" },
+        "telegram": { "type": "boolean" },
+        "pm2": { "type": "boolean" },
+        "mcp_catalog": { "type": "boolean" },
+        "toolset": { "type": "boolean" }
+      }
+    },
+    "toolset": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "scope": { "enum": ["user", "project"] },
+        "defaults": { "type": "boolean" },
+        "enable": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "disable": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "guard": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "mode": { "enum": ["arbiter", "guard-only", "confirm", "allow-all"] } }
+    },
+    "engine_settings": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "claude": { "$ref": "#/$defs/engineSettings" },
+        "codex": { "$ref": "#/$defs/engineSettings" },
+        "opencode": { "$ref": "#/$defs/engineSettings" }
+      }
+    },
+    "inventory": { "type": "object" }
+  },
+  "$defs": {
+    "fileRole": {
+      "type": "object", "additionalProperties": false, "required": ["path"],
+      "properties": { "path": { "type": "string", "minLength": 1 } }
+    },
+    "directoryRole": {
+      "type": "object", "additionalProperties": false, "required": ["path"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "engineSettings": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "model": { "type": ["string", "null"], "minLength": 1 },
+        "effort": { "type": ["string", "null"], "minLength": 1 },
+        "timeoutMs": { "type": "integer", "minimum": 0 },
+        "idleTimeoutMs": { "type": "integer", "minimum": 0 },
+        "networkRetries": { "type": "integer", "minimum": 0 },
+        "strictMcp": { "type": "boolean" },
+        "permissionMode": { "type": "string", "minLength": 1 },
+        "sandbox": { "enum": ["danger-full-access", "workspace-write", "read-only"] },
+        "homeMode": { "enum": ["personal", "managed"] },
+        "homeDir": { "type": "string", "minLength": 1 },
+        "instructionsMaxBytes": { "type": "integer", "minimum": 0 },
+        "strictVersion": { "type": "boolean" },
+        "config": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    }
+  }
+}

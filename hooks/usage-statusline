@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# usage-statusline — a thin wrapper around the status line script (see usage-statusline.mjs).
+# Extensionless for the same reason as ralph-loop-stop: run-hook.cmd launches it through bash on
+# every platform. stdin is passed to node through exec.
+
+set -uo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+exec node "$DIR/usage-statusline.mjs"

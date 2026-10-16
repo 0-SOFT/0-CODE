@@ -10,9 +10,10 @@
 // Whether the suite as a whole is green stays where it belongs: the release gate runs smoke.
 
 import { test } from 'node:test';
+import { cleanupTempDir } from '../helpers/index.mjs';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -51,7 +52,7 @@ test('scan: a live config/.env is out of reach because git would not stage it', 
   }
 });
 
-test('scan: a secret in a TRACKED file is reported, the same secret in an IGNORED file is not', () => {
+test('scan: a secret in a TRACKED file is reported, the same secret in an IGNORED file is not', async () => {
   const dir = mkRepo();
   try {
     mkdirSync(join(dir, 'config'), { recursive: true });
@@ -64,20 +65,20 @@ test('scan: a secret in a TRACKED file is reported, the same secret in an IGNORE
     assert.deepEqual(findings.map(f => f.file), ['config/settings.json']);
     assert.equal(findings[0].pattern, 'GitHub token');
     assert.equal(findings[0].line, 1);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { await cleanupTempDir(dir); }
 });
 
-test('scan: an untracked file that no rule ignores is still scanned', () => {
+test('scan: an untracked file that no rule ignores is still scanned', async () => {
   const dir = mkRepo();
   try {
     // Never added to the index and not ignored: exactly what one `git add .` would sweep up.
     writeFileSync(join(dir, 'notes.txt'), `key=${TOKEN}\n`);
     const findings = scanPaths(dir, []);
     assert.deepEqual(findings.map(f => f.file), ['notes.txt']);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { await cleanupTempDir(dir); }
 });
 
-test('scan: outside a git work tree the answer is null, not "clean"', () => {
+test('scan: outside a git work tree the answer is null, not "clean"', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'secret-scan-bare-'));
   try {
     writeFileSync(join(dir, 'leak.txt'), `key=${TOKEN}\n`);
@@ -86,14 +87,14 @@ test('scan: outside a git work tree the answer is null, not "clean"', () => {
       scanPaths(dir, []), null,
       'returning [] here would let the gate report a pass it never performed',
     );
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { await cleanupTempDir(dir); }
 });
 
-test('scan: a binary file is skipped rather than producing noise', () => {
+test('scan: a binary file is skipped rather than producing noise', async () => {
   const dir = mkRepo();
   try {
     writeFileSync(join(dir, 'blob.bin'), Buffer.from([0x00, 0x01, 0x02, 0x00]));
     writeFileSync(join(dir, 'plain.txt'), 'nothing here\n');
     assert.deepEqual(scanPaths(dir, []), []);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { await cleanupTempDir(dir); }
 });

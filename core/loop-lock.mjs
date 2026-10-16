@@ -55,11 +55,16 @@
 // Every function takes time, host name and the liveness checks as parameters — so behaviour can be
 // tested without race conditions and without real processes.
 
-import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, statSync,
+  readdirSync, renameSync, rmdirSync, lstatSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { hostname } from 'node:os';
+import { DOCUMENT_DEFAULTS, loadProjectConfig } from './project-config.mjs';
+import { replaceFileSync, retryWindowsFileOperation } from '../lib/replace-file.mjs';
 
-export const LOCK_FILE = join('docs', '.loop.lock');
+export const LOCK_FILE = join(dirname(DOCUMENT_DEFAULTS.state.path), '.loop.lock');
+export const LOCK_BUSY = 'busy';
 
 // How long the lock is considered alive without a heartbeat update.
 //
@@ -90,13 +95,16 @@ export const FILE_EVIDENCE = 'file';
 export const HEARTBEAT_EVIDENCE = 'heartbeat';
 
 export function lockPath(projectDir = process.cwd()) {
-  return join(projectDir, LOCK_FILE);
+  return loadProjectConfig({ projectDir }).runtimePath('.loop.lock');
 }
 
 export function readLock(projectDir = process.cwd()) {
   const p = lockPath(projectDir);
-  if (!existsSync(p)) return null;
-  try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; }
+  let text;
+  try {text=retryWindowsFileOperation(()=>readFileSync(p,'utf8'));}
+  catch(error) {if(error.code==='ENOENT')return null;throw error;}
+  // A denied read is not evidence of absence. Only malformed JSON retains the legacy recovery.
+  try {return JSON.parse(text);} catch(error) {if(error instanceof SyntaxError)return null;throw error;}
 }
 
 // Is a process with this id alive on THIS machine?
@@ -192,6 +200,81 @@ function describeOwner(lock) {
   return parts.join(', ');
 }
 
+// All ownership changes share one filesystem mutex. Its staging directory already contains
+// the complete owner marker before publication: rename cannot replace a nonempty directory on
+// either POSIX or Windows. An empty mutex never names a live critical section.
+//
+// Reclamation only removes the observed UNIQUE marker of a dead local process. If somebody
+// already removed it, we must not remove the directory: it may now belong to another process.
+// rmdir refuses a newly published nonempty mutex even after the old marker was removed.
+function removeMutationMarker(directory, marker) {
+  try { unlinkSync(join(directory, marker)); }
+  catch (e) { if (e.code === 'ENOENT') return false; throw e; }
+  try { rmdirSync(directory); }
+  catch (e) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(e.code)) throw e; }
+  return true;
+}
+
+function reclaimMutation(directory) {
+  try {
+    const stat = lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    const entries = readdirSync(directory);
+    // Empty remnants are safe: published live mutexes always carry their marker.
+    if (entries.length === 0) { rmdirSync(directory); return true; }
+    if (entries.length !== 1 || !/^owner-[0-9a-f-]+\.json$/.test(entries[0])) return false;
+    const file = join(directory, entries[0]), member = lstatSync(file);
+    if (!member.isFile() || member.isSymbolicLink() || member.nlink !== 1) return false;
+    const owner = JSON.parse(readFileSync(file, 'utf8'));
+    if (owner.host !== hostname() || !Number.isSafeInteger(owner.pid) || owner.pid < 1
+        || isPidAlive(owner.pid)) return false;
+    return removeMutationMarker(directory, entries[0]);
+  } catch (e) {
+    if (['ENOENT', 'ENOTEMPTY', 'EEXIST', 'ENOTDIR', 'EPERM', 'EACCES'].includes(e.code)
+        || e instanceof SyntaxError) return false;
+    throw e;
+  }
+}
+
+function enterMutation(projectDir) {
+  const path = lockPath(projectDir), directory = path + '.guard';
+  const staging = directory + '-' + randomUUID(), marker = 'owner-' + randomUUID() + '.json';
+  mkdirSync(dirname(path), { recursive: true });
+  mkdirSync(staging);
+  try {
+    writeFileSync(join(staging, marker), JSON.stringify({ pid: process.pid, host: hostname() }), { flag: 'wx' });
+    // One bounded retry is enough after reclaiming a dead holder; contention never spins or sleeps.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        renameSync(staging, directory);
+        return () => removeMutationMarker(directory, marker);
+      } catch (e) {
+        if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes(e.code)) throw e;
+        // The preceding holder may have left between rename's collision and this check.
+        if (!existsSync(directory)) { if (attempt === 0) continue; return null; }
+        if (attempt === 0 && reclaimMutation(directory)) continue;
+        return null;
+      }
+    }
+    return null;
+  } finally {
+    if (existsSync(staging)) removeMutationMarker(staging, marker);
+  }
+}
+
+function writeLock(projectDir, lock) {
+  const path = lockPath(projectDir), temporary = path + '.tmp-' + randomUUID();
+  const before=existsSync(path)?readFileSync(path):null;
+  try {
+    writeFileSync(temporary, JSON.stringify(lock, null, 2), { encoding: 'utf8', flag: 'wx' });
+    replaceFileSync(temporary,path,{validate(){
+      if(lockPath(projectDir)!==path)throw new Error('Loop lock path changed during publication');
+      const current=existsSync(path)?readFileSync(path):null;
+      if(before===null?current!==null:current===null||!before.equals(current))throw new Error('Loop lock changed during publication');
+    }});
+  } finally { if (existsSync(temporary)) unlinkSync(temporary); }
+}
+
 // Attempt to take the lock.
 // Returns { acquired, state, takenOver, previous, reason }.
 export function acquireLock({
@@ -199,51 +282,58 @@ export function acquireLock({
   sessionId = null, liveness = null, now = Date.now(), ttlMs = LOCK_TTL_MS,
   pidAlive = isPidAlive, touchedAt = fileTouchedAt, fileTouchedAt: touchedAtAlias = null,
 } = {}) {
-  const previous = readLock(projectDir);
-  const state = ownerState(previous, {
-    now, host, ttlMs, pidAlive, touchedAt: touchedAtAlias || touchedAt,
-  });
+  const leave = enterMutation(projectDir);
+  // A busy claimant has no ownership decision to publish. Reading the JSON here would only
+  // race the holder's publication, and on Windows an open reader can postpone replacement.
+  if (!leave) return { acquired: false, state: 'busy', takenOver: false, previous: null,
+    reason: 'the loop lock is being updated by another process; this invocation did not acquire it. Retry after that mutation finishes.' };
+  try {
+    const previous = readLock(projectDir);
+    const state = ownerState(previous, {
+      now, host, ttlMs, pidAlive, touchedAt: touchedAtAlias || touchedAt,
+    });
 
-  if (state === 'alive' || state === 'foreign-unknown') {
-    const mine = claimEvidence({ liveness, pid });
-    // Our own lock from a previous turn is not somebody else's: the same session must be able to go
-    // on driving the loop it already owns.
-    if (!sameOwner(evidenceOf(previous), mine)) {
-      return {
-        acquired: false, state, takenOver: false, previous,
-        reason: state === 'alive'
-          ? `the loop is already driven by ${describeOwner(previous)}, started ${previous.startedAt}. ` +
-            'It will be released once that owner goes quiet, or immediately if you delete docs/.loop.lock.'
-          : `the loop is held by host "${previous.host}" (${describeOwner(previous)}) with a fresh ` +
-            'heartbeat — it cannot be verified from here.',
-      };
+    if (state === 'alive' || state === 'foreign-unknown') {
+      const mine = claimEvidence({ liveness, pid });
+      // Our own lock from a previous turn is not somebody else's: the same session must be able to go
+      // on driving the loop it already owns.
+      if (!sameOwner(evidenceOf(previous), mine)) {
+        return {
+          acquired: false, state, takenOver: false, previous,
+          reason: state === 'alive'
+            ? `the loop is already driven by ${describeOwner(previous)}, started ${previous.startedAt}. ` +
+              `It will be released once that owner goes quiet, or immediately if you delete ${lockPath(projectDir)}.`
+            : `the loop is held by host "${previous.host}" (${describeOwner(previous)}) with a fresh ` +
+              'heartbeat — it cannot be verified from here.',
+        };
+      }
     }
-  }
 
-  // Carrying on with a lock that is already ours keeps the moment we took it: "since when" is what
-  // a human reads in the refusal handed to the next session, and restamping it every turn would
-  // make a loop running since morning look like one that started a minute ago.
-  const ours = previous && sameOwner(evidenceOf(previous), claimEvidence({ liveness, pid }));
-  const lock = {
-    pid, host, engine, sessionId,
-    liveness: claimEvidence({ liveness, pid }),
-    startedAt: ours && previous.startedAt ? previous.startedAt : new Date(now).toISOString(),
-    heartbeatAt: new Date(now).toISOString(),
-  };
-  const p = lockPath(projectDir);
-  mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(lock, null, 2), 'utf8');
+    // Carrying on with a lock that is already ours keeps the moment we took it: "since when" is what
+    // a human reads in the refusal handed to the next session, and restamping it every turn would
+    // make a loop running since morning look like one that started a minute ago.
+    const ours = previous && sameOwner(evidenceOf(previous), claimEvidence({ liveness, pid }));
+    const lock = {
+      pid, host, engine, sessionId,
+      liveness: claimEvidence({ liveness, pid }),
+      startedAt: ours && previous.startedAt ? previous.startedAt : new Date(now).toISOString(),
+      heartbeatAt: new Date(now).toISOString(),
+    };
+    writeLock(projectDir, lock);
 
-  return {
-    acquired: true, state, takenOver: state === 'dead' || state === 'stale', previous,
-    reason: state === 'free' ? 'the lock was free'
-      : state === 'dead' ? `the previous owner (process ${previous.pid}) is dead — loop taken over`
-        : state === 'stale' ? `the previous owner (${describeOwner(previous)}) went stale — loop taken over`
-          : 'the loop was already ours — carrying on',
-  };
+    return {
+      acquired: true, state, takenOver: state === 'dead' || state === 'stale', previous,
+      reason: state === 'free' ? 'the lock was free'
+        : state === 'dead' ? `the previous owner (process ${previous.pid}) is dead — loop taken over`
+          : state === 'stale' ? `the previous owner (${describeOwner(previous)}) went stale — loop taken over`
+            : 'the loop was already ours — carrying on',
+    };
+  } finally { leave(); }
 }
 
-// Heartbeat update. Returns false if the lock is no longer ours (somebody took it over).
+// Heartbeat update: true means ownership was checked and the heartbeat was written under the
+// mutex; false means the serialized check found another owner; LOCK_BUSY makes no ownership
+// claim. A pre-takeover snapshot cannot safely replace the actual serialized check.
 //
 // Ownership is decided by the evidence, not by the process number: a Stop hook is a different
 // process on every turn, and judging by the number would mean a session could never keep its own
@@ -251,16 +341,58 @@ export function acquireLock({
 export function refreshLock({
   projectDir = process.cwd(), pid = process.pid, liveness = null, now = Date.now(),
 } = {}) {
-  const lock = readLock(projectDir);
-  if (!lock || !sameOwner(evidenceOf(lock), claimEvidence({ liveness, pid }))) return false;
-  lock.heartbeatAt = new Date(now).toISOString();
-  writeFileSync(lockPath(projectDir), JSON.stringify(lock, null, 2), 'utf8');
-  return true;
+  const leave = enterMutation(projectDir);
+  if (!leave) return LOCK_BUSY;
+  try {
+    const lock = readLock(projectDir);
+    if (!lock || !sameOwner(evidenceOf(lock), claimEvidence({ liveness, pid }))) return false;
+    lock.heartbeatAt = new Date(now).toISOString();
+    writeLock(projectDir, lock);
+    return true;
+  } finally { leave(); }
+}
+
+// Callers about to launch work or publish state require a definite serialized answer. A brief
+// collision gets at most 20 checks and 19 scheduled 10 ms pauses; an unavailable mutex remains
+// explicitly busy. Scheduling and filesystem latency are not claimed as a hard wall-clock cap.
+// Heartbeat timers use the synchronous function and may simply try again on their next tick.
+async function eventually(operation, options, {
+  attempts = 20, delayMs = 10, wait = ms => new Promise(resolve => setTimeout(resolve, ms)),
+} = {}) {
+  if (!Number.isSafeInteger(attempts) || attempts < 1 || !Number.isFinite(delayMs) || delayMs < 0
+      || typeof wait !== 'function') throw new Error('Invalid loop lock retry parameters');
+  let result;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    result = operation(options);
+    if (result !== LOCK_BUSY && result?.state !== LOCK_BUSY) return result;
+    if (attempt + 1 < attempts) await wait(delayMs);
+  }
+  return result;
+}
+
+export function refreshLockEventually(options = {}, retry = {}) {
+  return eventually(refreshLock, options, retry);
+}
+
+export function acquireLockEventually(options = {}, retry = {}) {
+  return eventually(acquireLock, options, retry);
 }
 
 // Release the lock. We only remove OUR OWN — touching someone else's would break take-over.
-export function releaseLock({ projectDir = process.cwd(), pid = process.pid, liveness = null } = {}) {
-  const lock = readLock(projectDir);
-  if (!lock || !sameOwner(evidenceOf(lock), claimEvidence({ liveness, pid }))) return false;
-  try { unlinkSync(lockPath(projectDir)); return true; } catch { return false; }
+function releaseLockAttempt({ projectDir = process.cwd(), pid = process.pid, liveness = null } = {}) {
+  const leave = enterMutation(projectDir);
+  if (!leave) return LOCK_BUSY;
+  try {
+    const lock = readLock(projectDir);
+    if (!lock || !sameOwner(evidenceOf(lock), claimEvidence({ liveness, pid }))) return false;
+    try { unlinkSync(lockPath(projectDir)); return true; }
+    catch (e) { return ['EPERM', 'EACCES', 'EBUSY'].includes(e.code) ? LOCK_BUSY : false; }
+  } finally { leave(); }
+}
+
+// Exit/signal handlers remain synchronous. Normal completion can wait for a brief
+// filesystem collision, verifying ownership under the mutex on EVERY attempt.
+export function releaseLock(options = {}) { return releaseLockAttempt(options) === true; }
+export function releaseLockEventually(options = {}, retry = {}) {
+  return eventually(releaseLockAttempt, options, retry);
 }

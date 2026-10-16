@@ -34,6 +34,7 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseYaml } from '../lib/yaml-mini.mjs';
 import { isSubstantiveReason } from './permission-decision.mjs';
+import { DOCUMENT_DEFAULTS, loadProjectConfig } from './project-config.mjs';
 
 // Two options is a fork, and flat thinking hides in forks: the second option is usually there to
 // make the first one look chosen. Three is the smallest number that forces a comparison.
@@ -166,13 +167,19 @@ export function parseDecision(file) {
 // every turn, and prints the answer beside the rest of the machine truth. Until now a decision taken
 // flat looked exactly like one taken carefully, which is how 85 % of the work came to name no
 // alternative at all.
-export function findDecisionFor(projectDir, version, { dir = join('docs', 'decisions') } = {}) {
+export function findDecisionFor(projectDir, version, { dir, name } = {}) {
   const v = String(version || '').trim();
   if (!v) return null;
-  const root = join(projectDir, dir);
+  const document = loadProjectConfig({ projectDir }).config.documents.decisions;
+  const root = join(projectDir, dir ?? document.path);
+  const pattern = (name ?? document.name).split(/(<(?:version|name|date|id)>)/).map(part =>
+    part === '<version>' ? v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : /^<.+>$/.test(part)
+      ? '.+' : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('');
+  const matches = new RegExp(`^${pattern}$`);
   let names = [];
   try { names = readdirSync(root); } catch { return null; }
-  const match = names.find((n) => n.startsWith(`${v}_`) && n.endsWith('.md'));
+  const match = names.sort().find(n => matches.test(n) && (name ?? document.name).includes('<version>')
+    || matches.test(n) && String(parseDecision(join(root, n))?.version || '') === v);
   if (!match) return null;
   const file = join(root, match);
   const record = parseDecision(file);
@@ -185,10 +192,10 @@ export function findDecisionFor(projectDir, version, { dir = join('docs', 'decis
 
 // One line for the continuation header. Says what is there, or that nothing is — silence would put
 // us back where we started.
-export function summariseDecision(found, version) {
+export function summariseDecision(found, version, directory = DOCUMENT_DEFAULTS.decisions.path) {
   if (!found) {
     return `decision record: none for ${version || 'this version'} — if this version chooses between ` +
-      'ways of building something, write one under docs/decisions/ before choosing';
+      `ways of building something, write one under ${directory}/ before choosing`;
   }
   const check = validateDecision(found);
   const ranked = rankOptions(found);

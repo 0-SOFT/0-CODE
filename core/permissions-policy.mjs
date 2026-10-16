@@ -18,7 +18,8 @@
 //     → the core/safety.mjs detector via the hook; experiment H1 proved a hook `deny` works even
 //     under bypass.
 //
-// Two independent lines of defence remain: `deny` in settings plus `deny` from the hook.
+// Framework denials now live in the shared hook decision. A static deny would override both
+// a confirmed force push and allow-all; it cannot express the selected runtime mode.
 // Two files used to drift apart (the framework's own settings and the template for projects) —
 // both are now generated from this module (see tools/gen-settings.mjs), so drift is impossible.
 
@@ -32,7 +33,7 @@ export const ALLOW = [
   // File and search tools
   'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch',
   // Git: the full routine set. Autonomous pushing is a workflow requirement; only `--force` is
-  // dangerous, and it sits in DENY as well as in the detector.
+  // confirmed by the shared guard when the owner deliberately chooses it.
   'Bash(git status)', 'Bash(git diff *)', 'Bash(git log *)', 'Bash(git add *)',
   'Bash(git commit *)', 'Bash(git branch *)', 'Bash(git checkout *)', 'Bash(git pull *)',
   'Bash(git push *)', 'Bash(git fetch *)', 'Bash(git remote *)', 'Bash(git rev-list *)',
@@ -52,22 +53,13 @@ export const ALLOW = [
   'Bash(curl https://api.telegram.org/*)',
 ];
 
-// Denials (v1.2.1 — reduced to a minimum).
-//
-// A glob in the settings is a blunt instrument: it sees neither the command's target nor its
-// context, which is exactly why globs produced false refusals on routine work (`git clean -fdx`,
-// `git reset --hard origin/main`, `npm publish --dry-run`). Subtle decisions belong to the
-// core/safety.mjs detector, which splits the command into segments and looks at the target.
-//
-// What remains here is only a safety net for the case where the hook never runs at all (the hook
-// wrapper deliberately fails open, for example when the machine has no bash). Hence the list
-// covers nothing but destroying the machine and rewriting shared history: cases where a glob
-// cannot be wrong and the cost of being wrong is unrecoverable.
-export const DENY = [
+// Only for migration of generated project settings; never a policy to install again.
+export const LEGACY_FRAMEWORK_DENY = Object.freeze([
   'Bash(rm -rf /)', 'Bash(rm -rf /*)', 'Bash(rm -rf ~)', 'Bash(rm -rf ~/*)',
   'Bash(sudo rm -rf /*)', 'Bash(sudo rm -rf ~*)',
   'Bash(git push --force*)', 'Bash(git push -f *)',
-];
+]);
+export const DENY = [];
 
 // The permissions block for settings.json. There is no `ask` key here and there cannot be one.
 export function buildPermissionsBlock({ mode = DEFAULT_MODE } = {}) {

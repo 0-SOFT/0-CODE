@@ -21,9 +21,10 @@
 // core/permission-decision.mjs, and this file does nothing but input and output.
 
 import { readFileSync, existsSync, appendFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
-import { decidePermission, resolveMode, MODES, ALLOW_ALL } from '../core/permission-decision.mjs';
+import { decidePermission, resolveMode, MODES, guardAuditRecord } from '../core/permission-decision.mjs';
+import { findProjectRoot, loadProjectConfig } from '../core/project-config.mjs';
 
 let input = '';
 try { input = readFileSync(0, 'utf8'); } catch { /* no stdin — acceptable */ }
@@ -35,7 +36,10 @@ try { ev = JSON.parse(input || '{}'); } catch { ev = {}; }
 // being swallowed. Continuing on the safe default is the right trade — a typo in an environment
 // variable must not halt the loop — but doing it silently is how somebody ends up believing the
 // guard is off while it is fully on.
-const modeReport = resolveMode(process.env);
+let project;
+try { project = loadProjectConfig({ projectDir: process.env.CLAUDE_PROJECT_DIR || ev.cwd || findProjectRoot() }); }
+catch (error) { process.stderr.write(`safety-guard: ${error.message}; using environment/default mode\n`); }
+const modeReport = resolveMode(project?.guardEnvironment || process.env);
 if (!modeReport.recognised) {
   process.stderr.write(
     `safety-guard: SAFETY_GUARD_MODE="${modeReport.requested}" is not a known mode ` +
@@ -45,39 +49,17 @@ if (!modeReport.recognised) {
 const decision = decidePermission(ev, { mode: modeReport.mode });
 
 if (decision) {
-  // What goes into the log, and why two kinds of line.
-  //
-  // A refusal is recorded because it is evidence for analysis and for live acceptance. A CONFIRMED
-  // operation is recorded for a different and more important reason: the confirm mode trades a hard
-  // guarantee for the agent's judgement, and that trade is only honest if the judgement can be
-  // reviewed afterwards. An allowed destructive command that left no trace would be strictly worse
-  // than a refusal.
-  const out = decision.hookSpecificOutput;
-  const confirmed = out.permissionDecision === 'allow' && / rule confirmed by the agent /.test(out.permissionDecisionReason);
-  if (out.permissionDecision === 'deny' || confirmed) {
-    try {
-      const dir = join(homedir(), '.claude');
-      if (existsSync(dir)) {
-        const cmd = (ev.tool_input && (ev.tool_input.command ?? ev.tool_input.cmd)) || '';
-        const tag = confirmed ? '[confirmed]' : '[blocked]';
-        appendFileSync(join(dir, 'safety-guard.log'),
-          `${tag} [mode ${modeReport.mode}] ${out.permissionDecisionReason} :: ${cmd}\n`);
-      }
-    } catch { /* the log is not critical */ }
-  }
   process.stdout.write(JSON.stringify(decision));
 }
 
 // A mode that never denies leaves no [blocked] lines, so without this the log would look exactly
 // like a quiet day. The claim "the guard is off" has to be checkable by observation.
-if (!modeReport.recognised || modeReport.mode === ALLOW_ALL) {
+const entry = guardAuditRecord(ev, decision, modeReport);
+if (entry) {
   try {
-    const dir = join(homedir(), '.claude');
-    if (existsSync(dir)) {
-      appendFileSync(join(dir, 'safety-guard.log'),
-        `[mode ${modeReport.mode}]${modeReport.recognised ? '' : ` (requested "${modeReport.requested}")`}`
-        + ` ${new Date().toISOString()}\n`);
-    }
+    const file = process.env.SAFETY_GUARD_LOG || (project?.installed ? project.runtimePath('guard.log')
+      : join(homedir(), '.claude', 'safety-guard.log'));
+    if (existsSync(dirname(file))) appendFileSync(file, JSON.stringify(entry) + '\n');
   } catch { /* the log is not critical */ }
 }
 

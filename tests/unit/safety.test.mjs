@@ -1,8 +1,12 @@
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   head, segmentReason, destructiveReason, destructiveVerdict, confirmationOf, HARD,
 } from '../../core/safety.mjs';
+import { decidePermission } from '../../core/permission-decision.mjs';
+import { evaluateCodexHook } from '../../core/backends/codex-hook.mjs';
+import { OpenCodeBackend } from '../../core/backends/opencode.mjs';
 
 // v1.2.1 — protection reduced to a minimum. Only rules where the consequence is unrecoverable AND
 // there is essentially no legitimate use inside a development loop survived. Everything else was
@@ -18,10 +22,85 @@ test('blocked: destroying the filesystem (POSIX)', () => {
   }
 });
 
+test('all three guards inspect commands behind wrappers, paths and explicit shells', () => {
+  const opencode = new OpenCodeBackend();
+  for (const command of [
+    'env git push --force', 'env CHECK=fixture command /usr/bin/git push --force',
+    'CHECK=fixture /usr/bin/env command git push --force',
+    '/usr/bin/git push --force', 'command rm -rf /', 'rm --recursive /',
+    'bash -c "git push --force"', "bash -lc 'rm --recursive /'",
+    '/bin/sh -c "git push --force"',
+    'powershell -NoProfile -Command "Remove-Item -Recurse C:/"',
+    'pwsh -Command "git push --force"', 'cmd /c "git push --force"',
+    'git -C "repo with spaces" push "--force"',
+    '"C:\\Program Files\\Git\\bin\\git.exe" push --force',
+  ]) {
+    const event = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } };
+    assert.ok(opencode.guardCommand(command), `OpenCode must refuse: ${command}`);
+    assert.equal(decidePermission(event, { mode: 'arbiter' }).hookSpecificOutput.permissionDecision, 'deny', command);
+    assert.equal(evaluateCodexHook(JSON.stringify(event), decidePermission)?.hookSpecificOutput.permissionDecision,
+      'deny', `Codex must refuse: ${command}`);
+  }
+});
+
+test('wrapper inspection keeps quoted data and ordinary nested commands allowed', () => {
+  for (const command of [
+    'echo "bash -c git push --force"', 'grep -n "env rm --recursive /" source.txt',
+    "bash -c 'echo \"git push --force\"'", 'pwsh -Command "Write-Output hello"',
+    'cmd /c "echo hello"', 'env CHECK=fixture /usr/bin/git push origin main',
+    'command rm --recursive ./build', 'git -C "repo with spaces" push --force-with-lease',
+  ]) assert.equal(destructiveReason(command), null, command);
+});
+
+test('all three guards inspect UTF-16LE PowerShell encoded command aliases', () => {
+  const opencode = new OpenCodeBackend();
+  for (const shell of ['powershell', 'pwsh']) for (const flag of ['-EncodedCommand', '-enc', '-ec', '-e', '/ec', '–EncodedCommand', '—EncodedCommand']) {
+    for (const script of ['Remove-Item -Recurse C:/', 'git push --force']) {
+      const encoded = Buffer.from(script, 'utf16le').toString('base64');
+      const command = `${shell} -NoProfile -ExecutionPolicy Bypass ${flag} "${encoded.slice(0, 8)} ${encoded.slice(8)}"`;
+      const event = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } };
+      assert.ok(opencode.guardCommand(command), shell + ' ' + flag);
+      assert.equal(decidePermission(event, { mode: 'arbiter' }).hookSpecificOutput.permissionDecision, 'deny');
+      assert.equal(evaluateCodexHook(JSON.stringify(event), decidePermission)?.hookSpecificOutput.permissionDecision, 'deny');
+    }
+  }
+});
+
+test('PowerShell file arguments, quoted encoded data and ordinary encoded scripts stay allowed', () => {
+  const danger = Buffer.from('git push --force', 'utf16le').toString('base64');
+  const harmless = Buffer.from('Write-Output "git push --force"', 'utf16le').toString('base64');
+  for (const command of [`powershell -EncodedCommand ${harmless}`, `echo "powershell -e ${danger}"`,
+    `powershell -File ./data.ps1 -EncodedCommand ${danger}`, 'powershell -File ./data.ps1 -Command "git push --force"',
+    'powershell -EncodedCommand invalid!!', 'powershell -EncodedCommand QQ==']) {
+    const event = { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } };
+    assert.equal(destructiveReason(command), null, command);
+    assert.equal(decidePermission(event, { mode: 'arbiter' }).hookSpecificOutput.permissionDecision, 'allow');
+    assert.equal(evaluateCodexHook(JSON.stringify(event), decidePermission), null);
+  }
+});
+
+test('a hard danger anywhere outranks a confirmed force push in a compound command', () => {
+  for (const suffix of ['rm -rf /', "bash -c 'rm --recursive /'"]) {
+    const command = `git push --force && ${suffix} # safety-guard: confirmed rebased my own private experimental branch after reviewing all changes`;
+    assert.equal(destructiveVerdict(command).level, HARD);
+    assert.equal(decidePermission({ tool_name: 'Bash', tool_input: { command } }, { mode: 'confirm' })
+      .hookSpecificOutput.permissionDecision, 'deny');
+  }
+});
+
 test('blocked: destroying the filesystem (Windows)', () => {
   for (const cmd of ['Remove-Item -Recurse -Force C:\\', 'Remove-Item -Path ~ -Recurse',
     'rd /s /q C:\\', 'rmdir /s /q %USERPROFILE%', 'del /f /s /q C:\\*']) {
     assert.ok(destructiveReason(cmd), `must be blocked: ${cmd}`);
+  }
+});
+
+test('the standalone Windows format help query stays allowed, an actual format stays hard', () => {
+  for (const command of ['format /?', 'format.com /?', 'cmd /c "format /?"']) {
+    assert.equal(destructiveVerdict(command), null, command);
+  }
+  for (const command of ['format C:', 'format C: /Q', 'format /? && format C:', 'format /? C:']) {
+    assert.equal(destructiveVerdict(command)?.level, HARD, command);
   }
 });
 
@@ -319,4 +398,49 @@ test('talking about the command is not performing it', () => {
     const v = destructiveVerdict(cmd);   // null means nothing matched at all, which is allowed
     assert.ok(!v || v.level !== HARD, `must stay allowed: ${cmd}`);
   }
+});
+
+// v1.25.0, found by the final audit: spellings of the four declared dangers that walked through.
+// The rule is stated at the level of the danger (as v1.18.1 did for taskkill): what is forbidden is
+// REWRITING SHARED HISTORY, DELETING THE HOME DIRECTORY and WIPING A DISK, whatever the spelling.
+test('force push in every spelling is caught, and the careful forms are not', () => {
+  for (const c of ['git push origin +main', 'git push origin +HEAD:main', 'git -C repo push -f',
+    'git -c core.x=y push --force origin main', 'git push --mirror', 'git push -uf origin main']) {
+    assert.ok(destructiveReason(c), `must be caught: ${c}`);
+  }
+  for (const c of ['git push origin main', 'git push --force-with-lease', 'git push -u origin feature',
+    'git push --force-if-includes --force-with-lease origin main', 'git push --force-if-includes origin main',
+    'git push origin feature+fix']) {
+    assert.equal(destructiveReason(c), null, `must be allowed: ${c}`);
+  }
+});
+
+test('the home directory with a trailing slash is the home directory', () => {
+  for (const c of ['rm -fr ~/', 'rm -rf $HOME/', 'rm -rf "${HOME}/"']) assert.ok(destructiveReason(c), c);
+  for (const c of ['rm -rf ~/projects/build', 'rm -rf $HOME/tmp/x']) assert.equal(destructiveReason(c), null, c);
+});
+
+test('writing raw bytes over a whole disk is wiping it', () => {
+  for (const c of ['dd if=/dev/zero of=/dev/sda', 'sudo dd if=x.img of=/dev/nvme0n1 bs=4M', 'dd of=/dev/disk2 if=/dev/zero']) {
+    assert.ok(destructiveReason(c), c);
+  }
+  for (const c of ['dd if=/dev/zero of=./disk.img bs=1M count=10', 'dd if=/dev/sda of=backup.img']) {
+    assert.equal(destructiveReason(c), null, c);
+  }
+});
+
+test('PowerShell literal here-strings are data for Node and commands for IEX or shells', () => {
+  const captured = JSON.parse(readFileSync(new URL('../fixtures/powershell-here-data.json', import.meta.url), 'utf8')).command;
+  assert.equal(destructiveReason(captured), null, 'the actual live regression assertion script is data');
+  const body = "@'\nrm -rf /\n'@";
+  for (const command of [body + ' | node', body + ' | python', "Set-Content -Path notes.txt -Value " + body]) {
+    assert.equal(destructiveReason(command), null);
+  }
+  for (const command of [body + ' | iex', body + '|Invoke-Expression', 'Invoke-Expression ' + body, body + ' | pwsh', body + ' | node; format C:']) {
+    assert.ok(destructiveReason(command), 'executed body or later danger must stay blocked');
+  }
+  const event = {tool_name:'exec_command',hook_event_name:'PreToolUse',tool_input:{command:captured}};
+  assert.equal(evaluateCodexHook(JSON.stringify(event), decidePermission), null);
+  event.tool_input.command=body + ' | iex';
+  assert.equal(evaluateCodexHook(JSON.stringify(event), decidePermission).hookSpecificOutput.permissionDecision, 'deny');
 });

@@ -1,3 +1,4 @@
+import { cleanupTempDirSync } from '../helpers/index.mjs';
 // tests/unit/turn-progress.test.mjs — the memory that lets a short-lived driver count turns.
 //
 // The module's whole job is to degrade gracefully: a missing file, a truncated one, a read-only
@@ -10,15 +11,29 @@ import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  MEMORY_FILENAME, memoryPath, readMemory, writeMemory, stagnantAfterTurn,
+  MEMORY_FILENAME, memoryPath, readMemory, writeMemory, stagnantAfterTurn, progressPolicy,
 } from '../../core/turn-progress.mjs';
 
 const SNAP_A = { gitHead: 'aaa111', treeHash: 'tree-1', stateHash: 'state-1' };
 const SNAP_B = { gitHead: 'bbb222', treeHash: 'tree-1', stateHash: 'state-1' };
 
+test('progress policy keeps the default, supports owner thresholds and disables escalation with zero', () => {
+  for (const state of [{}, { no_progress_after: null }]) {
+    assert.deepEqual(progressPolicy(state), { enabled: true, blockAfter: 3, escalateAfter: 2 });
+  }
+  assert.deepEqual(progressPolicy({ no_progress_after: 0 }), { enabled: false, blockAfter: Infinity, escalateAfter: Infinity });
+  assert.deepEqual(progressPolicy({ no_progress_after: 1 }), { enabled: true, blockAfter: 1, escalateAfter: 1 });
+  assert.deepEqual(progressPolicy({ no_progress_after: 5 }), { enabled: true, blockAfter: 5, escalateAfter: 4 });
+  assert.equal(progressPolicy({ no_progress_after: '4' }).blockAfter, 4);
+  for (const value of [-1, true, false, [], {}, NaN, Infinity, 1.5, 'wrong', Number.MAX_SAFE_INTEGER + 1]) {
+    const result = progressPolicy({ no_progress_after: value });
+    assert.equal(result.blockAfter, 3); assert.ok(result.warning);
+  }
+});
+
 function mkDocs() {
   const dir = mkdtempSync(join(tmpdir(), 'turn-progress-'));
-  return { dir, cleanup: () => { try { rmSync(dir, { recursive: true, force: true }); } catch {} } };
+  return { dir, cleanup: () => { try { cleanupTempDirSync(dir); } catch {} } };
 }
 
 test('memory: the file sits beside the loop lock, not inside STATE', () => {

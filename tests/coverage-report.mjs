@@ -4,7 +4,8 @@
 // this function would spawn the whole suite as a side effect. A parser that cannot be examined
 // without running everything it measures does not get examined.
 //
-// Node prints the table in one of two shapes, depending on version and platform:
+// Node prints the table in two shapes, depending on version and platform. TAP uses '#',
+// while Node 24's default spec reporter uses the information symbol (U+2139):
 //
 //   flat   # core\gates.mjs        | 100.00 | ...     (full relative path, OS separators)
 //   tree   # core                  |        | ...     (a directory row, no percentages)
@@ -20,7 +21,7 @@ export function coverageRows(stdout) {
   for (const line of (stdout || '').split('\n')) {
     // Both numbers, not just the first. Until v1.17.0 only the line percentage was read, so the
     // gate above could speak only about lines while sounding like it spoke about coverage.
-    const m = line.match(/^#(\s+)(\S+)\s+\|\s*([\d.]*)\s*\|\s*([\d.]*)\s*\|/);
+    const m = line.match(/^(?:#|\u2139)(\s+)(\S+)\s+\|\s*([\d.]*)\s*\|\s*([\d.]*)\s*\|/);
     if (!m) continue;
     const depth = m[1].length - 1;
     const name = m[2];

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { mkTempProject, readFrontmatter } from '../helpers/index.mjs';
@@ -20,6 +20,62 @@ test('update-state: applies the patch and creates a backup', () => {
     assert.equal(r.status, 0);
     assert.equal(readFrontmatter(p.stateFile).iteration, 7);
     assert.ok(existsSync(`${p.stateFile}.bak.1`));
+  } finally { p.cleanup(); }
+});
+
+test('update-state: lossless strings leave a readable state through subsequent writes', () => {
+  const p = mkTempProject();
+  try {
+    const last_action = 'engine progress\rcontinued\u2028next\u2029end';
+    const scalar_values = { empty: '', negative: '-42', quoted: '"literal"',
+      single: "'literal'", tab: 'x\t', inline: ['x\u2028y', 'x\u2029y'] };
+    const result = apply(p.stateFile, JSON.stringify({ last_action, scalar_values }));
+    assert.equal(result.status, 0, result.stderr);
+    let state = readFrontmatter(p.stateFile);
+    assert.equal(state.last_action, last_action);
+    assert.deepEqual(state.scalar_values, scalar_values);
+    const subsequent = apply(p.stateFile, '{"iteration":1}');
+    assert.equal(subsequent.status, 0, subsequent.stderr);
+    state = readFrontmatter(p.stateFile);
+    assert.equal(state.iteration, 1);
+    assert.equal(state.last_action, last_action);
+    assert.deepEqual(state.scalar_values, scalar_values);
+  } finally { p.cleanup(); }
+});
+
+test('update-state: unrepresentable patches refuse before backups or publication without exposing data', () => {
+  const patches = [JSON.stringify({ notes: { 'invalid key': 'sensitive-marker' } }),
+    JSON.stringify({ notes: [{ '': 'sensitive-marker' }] }), '{"value":1e999}'];
+  for (const patch of patches) {
+    const p = mkTempProject();
+    try {
+      const original = readFileSync(p.stateFile);
+      const directory = dirname(p.stateFile), files = readdirSync(directory).sort();
+      const result = apply(p.stateFile, patch);
+      assert.notEqual(result.status, 0, 'an unreadable or changed representation must be refused');
+      assert.doesNotMatch(result.stdout + result.stderr, /sensitive-marker/);
+      assert.deepEqual(readFileSync(p.stateFile), original);
+      assert.deepEqual(readdirSync(directory).sort(), files, 'even the backup ring must be unchanged');
+      assert.equal(readFrontmatter(p.stateFile).iteration, 0);
+    } finally { p.cleanup(); }
+  }
+});
+
+test('update-state: special patch keys remain own data and merge only existing own values', () => {
+  const p = mkTempProject();
+  try {
+    let result = apply(p.stateFile, '{"__proto__":{"first":1,"blockers":["nested"]},"constructor":{"prototype":{"marker":"ordinary"}}}');
+    assert.equal(result.status, 0, result.stderr);
+    let state = readFrontmatter(p.stateFile);
+    assert.ok(Object.hasOwn(state, '__proto__'));
+    assert.equal(Object.getPrototypeOf(state), Object.prototype);
+    assert.deepEqual(state.blockers, []);
+    assert.deepEqual(state.__proto__, { first: 1, blockers: ['nested'] });
+    result = apply(p.stateFile, '{"__proto__":{"second":2}}');
+    assert.equal(result.status, 0, result.stderr);
+    state = readFrontmatter(p.stateFile);
+    assert.deepEqual(state.__proto__, { first: 1, blockers: ['nested'], second: 2 });
+    assert.equal(Object.prototype.marker, undefined);
   } finally { p.cleanup(); }
 });
 

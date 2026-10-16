@@ -17,8 +17,9 @@
 
 import { ClaudeBackend } from './backends/claude.mjs';
 import { OpenCodeBackend } from './backends/opencode.mjs';
+import { CodexBackend } from './backends/codex.mjs';
 
-const SUPPORTED = ['claude', 'opencode'];
+const SUPPORTED = ['claude', 'opencode', 'codex'];
 
 export function autodetectBackendId(env = process.env) {
   // v1.10.0. This used to read `if (AGENT_BACKEND && SUPPORTED.includes(...)) return it` — so a
@@ -44,13 +45,15 @@ export function autodetectBackendId(env = process.env) {
   return 'claude';
 }
 
-export function getBackend(id, { env = process.env } = {}) {
+export function getBackend(id, { env = process.env, envFiles } = {}) {
   const backendId = id || autodetectBackendId(env);
   switch (backendId) {
     case 'claude':
-      return new ClaudeBackend();
+      return new ClaudeBackend({ env, envFiles });
     case 'opencode':
-      return new OpenCodeBackend();
+      return new OpenCodeBackend({ env, envFiles });
+    case 'codex':
+      return new CodexBackend({ env, envFiles });
     default:
       throw new Error(`Unknown AGENT_BACKEND="${backendId}". Supported: ${SUPPORTED.join(', ')}.`);
   }

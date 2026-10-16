@@ -9,21 +9,35 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Backend } from './Backend.mjs';
-import { destructiveReason } from '../safety.mjs';
-import { runCli, runCliAsync } from './spawn-cli.mjs';
+import { guardReason } from '../permission-decision.mjs';
+import { runCliAsync } from './spawn-cli.mjs';
+import { registerClaudeMcp } from './claude-mcp.mjs';
+import { readJsonConfig, writeJsonConfig } from '../../lib/json-config.mjs';
+import { resolveEngineSettings } from '../engine-settings.mjs';
+import { loadEngineSettingsEnvironment } from '../../lib/codex-env.mjs';
+import { publishProjectInstructions } from '../../lib/project-instructions.mjs';
+import { LEGACY_FRAMEWORK_DENY } from '../permissions-policy.mjs';
 
 export class ClaudeBackend extends Backend {
+  constructor({ env = process.env, envFiles = [] } = {}) {
+    super();
+    this.env = loadEngineSettingsEnvironment(envFiles, env);
+  }
   get id() { return 'claude'; }
 
   // One agent turn: claude -p "<prompt>" --output-format json [--model ...] plus the headless
   // execution flags (v1.1.0, see buildClaudeArgs).
-  async runTurn({ prompt, cwd = process.cwd(), model, permissionMode, strictMcp, maxBudgetUsd,
-    promptViaStdin = true } = {}) {
+  async runTurn({ prompt, cwd = process.cwd(), model, effort, permissionMode, strictMcp, maxBudgetUsd,
+    env = this.env, timeoutMs, idleTimeoutMs, promptViaStdin = true } = {}) {
     if (!prompt) return { ok: false, output: '', error: 'empty prompt' };
-    const args = buildClaudeArgs({ prompt, model, permissionMode, strictMcp, maxBudgetUsd, promptViaStdin });
+    const settings = resolveEngineSettings(this.id, { model, effort, permissionMode, strictMcp, timeoutMs, idleTimeoutMs }, env);
+    const args = buildClaudeArgs({ prompt, ...settings, maxBudgetUsd, promptViaStdin }, env);
     const res = await runCliAsync('claude', args,
-      { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+      { cwd, env, timeoutMs: settings.timeoutMs, idleTimeoutMs: settings.idleTimeoutMs,
+        encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
         ...(promptViaStdin ? { input: prompt } : {}) });
+    if (res?.cleanupRefused) return { ok: false, output: res.stdout || '', cleanupRefused: true,
+      error: `Child cleanup refused: ${res.stderr || 'process ownership could not be proved'}` };
     if (!res || res.status !== 0) {
       return { ok: false, output: res?.stdout || '', error: res?.stderr || `claude exited ${res?.status}` };
     }
@@ -31,26 +45,13 @@ export class ClaudeBackend extends Backend {
     return { ok: true, ...parseClaudeJson(res.stdout) };
   }
 
-  // Registering portable MCP servers from the manifest: claude mcp add-json <name> '<json>' -s user.
-  async registerMcp(manifest, env = process.env) {
-    const registered = [], skipped = [];
-    const servers = (manifest && Array.isArray(manifest.servers)) ? manifest.servers : [];
-    for (const s of servers) {
-      if (s.portable === false || s.source === 'claude_ai' || s.needs_setup) { skipped.push(s.name); continue; }
-      const payload = substituteEnv(JSON.stringify({ command: s.command, args: s.args || [], env: s.env || {} }), env);
-      const res = runCli('claude', ['mcp', 'add-json', s.name, payload, '-s', 'user'],
-        { encoding: 'utf8' });
-      if (res && res.status === 0) registered.push(s.name); else skipped.push(s.name);
-    }
-    return { registered, skipped };
+  async registerMcp(manifest, env = process.env, options = {}) {
+    return registerClaudeMcp(manifest, env, options);
   }
 
   // Agent instructions for Claude → CLAUDE.md in the target project root.
   async installInstructions({ targetDir, content }) {
-    if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
-    const dest = join(targetDir, 'CLAUDE.md');
-    writeFileSync(dest, content, 'utf8');
-    return { written: [dest] };
+    return publishProjectInstructions({ targetDir, filename: 'CLAUDE.md', content });
   }
 
   // Claude permissions → a deep merge of allow/deny into the target project's .claude/settings.json.
@@ -58,17 +59,29 @@ export class ClaudeBackend extends Backend {
     const dir = join(targetDir, '.claude');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const file = join(dir, 'settings.json');
-    let cur = {};
-    if (existsSync(file)) { try { cur = JSON.parse(readFileSync(file, 'utf8')); } catch { cur = {}; } }
+    const cur = readJsonConfig(file);
     cur.permissions = cur.permissions || {};
+    // Remove only the known former framework rules, preserving other explicit project denials.
+    cur.permissions.deny = (cur.permissions.deny || []).filter(rule => !LEGACY_FRAMEWORK_DENY.includes(rule));
     if (policy.allow) cur.permissions.allow = Array.from(new Set([...(cur.permissions.allow || []), ...policy.allow]));
     if (policy.deny) cur.permissions.deny = Array.from(new Set([...(cur.permissions.deny || []), ...policy.deny]));
-    writeFileSync(file, JSON.stringify(cur, null, 2), 'utf8');
+    writeJsonConfig(file, cur);
     return { applied: true };
   }
 
+  async ensureReady({ cwd = process.cwd() } = {}) {
+    const file = join(cwd, '.claude', 'settings.json');
+    if (!existsSync(file)) return { restored: [] };
+    const config = readJsonConfig(file);
+    const deny = config.permissions?.deny;
+    if (!Array.isArray(deny) || !deny.some(rule => LEGACY_FRAMEWORK_DENY.includes(rule))) return { restored: [] };
+    config.permissions.deny = deny.filter(rule => !LEGACY_FRAMEWORK_DENY.includes(rule));
+    writeJsonConfig(file, config);
+    return { restored: [file] };
+  }
+
   // Destructive pre-check — shared by all backends (core/safety.mjs).
-  guardCommand(command) { return destructiveReason(command); }
+  guardCommand(command) { return guardReason(command, this.env); }
 }
 
 // Assembling `claude -p ...` arguments (pure, for tests and SRP).
@@ -82,8 +95,7 @@ export class ClaudeBackend extends Backend {
 //                                         which apply in ANY mode);
 //     override order: opts.permissionMode > env.CLAUDE_HEADLESS_PERMISSION_MODE > default;
 //     the value 'none' means "do not pass the flag" (old behaviour, for debugging);
-//   --strict-mcp-config                  (default; project MCP servers hang on npx startup and the
-//                                         loop does not need them; disable with strictMcp:false);
+//   --strict-mcp-config                  only when explicitly selected (CLAUDE_STRICT_MCP=1);
 //   --max-budget-usd <cap>               (per-turn spending guard, when provided);
 //   --continue                           NEVER (it glues the turn onto a poisoned session).
 // v1.2.0 — the prompt goes to standard input rather than into the arguments: the Windows command
@@ -91,15 +103,17 @@ export class ClaudeBackend extends Backend {
 // prompts are tens of kilobytes. Verified live: `claude -p` without a positional argument reads
 // the prompt from standard input. The previous way is still available via promptViaStdin:false
 // (debugging, compatibility).
-export function buildClaudeArgs({ prompt, model, permissionMode, strictMcp, maxBudgetUsd,
+export function buildClaudeArgs({ prompt, model, effort, permissionMode, strictMcp, maxBudgetUsd,
   promptViaStdin = true } = {}, env = process.env) {
   const args = ['-p'];
   if (!promptViaStdin) args.push(prompt);
   args.push('--output-format', 'json');
-  if (model) args.push('--model', model);
-  const mode = permissionMode ?? env.CLAUDE_HEADLESS_PERMISSION_MODE ?? 'bypassPermissions';
+  const settings = resolveEngineSettings('claude', { model, effort, permissionMode, strictMcp }, env);
+  if (settings.model) args.push('--model', settings.model);
+  if (settings.effort) args.push('--effort', settings.effort);
+  const mode = settings.permissionMode;
   if (mode && mode !== 'none') args.push('--permission-mode', mode);
-  if (strictMcp !== false) args.push('--strict-mcp-config');
+  if (settings.strictMcp) args.push('--strict-mcp-config');
   if (maxBudgetUsd) args.push('--max-budget-usd', String(maxBudgetUsd));
   return args;
 }
@@ -117,10 +131,6 @@ export function parseClaudeJson(stdout) {
   return { output, sessionId, costUsd, raw };
 }
 
-// Substituting ${VAR} and ${VAR:-default} from env (for the secret-free manifest).
-export function substituteEnv(str, env) {
-  return str.replace(/\$\{([A-Za-z_][\w]*)(?::-([^}]*))?\}/g, (_, name, def) =>
-    (env[name] !== undefined && env[name] !== '') ? env[name] : (def ?? ''));
-}
+export { substituteEnv } from './mcp-input.mjs';
 
 export default ClaudeBackend;

@@ -31,23 +31,144 @@
 // split respects quoting (see splitSegments), and each segment is checked by its "head" — so text
 // inside quotes does not trigger a false positive.
 
-// Strip leading env assignments and harmless wrappers to reach the "head" of the command.
+// Words retain their source spans so unwrapping a command does not turn quoted arguments into
+// executable text. This is a detector, not an interpreter for arbitrary dynamically computed code.
+function commandWords(text) {
+  const words = [];
+  let i = 0;
+  while (i < text.length) {
+    if (/\s/.test(text[i])) { i++; continue; }
+    const start = i;
+    let value = '', quote = null;
+    while (i < text.length) {
+      const ch = text[i];
+      if (!quote && /\s/.test(ch)) break;
+      if ((ch === '\\' && quote !== "'" && /[\s"'\\$`]/.test(text[i + 1] || ''))
+          || (ch === '`' && quote !== "'" && text[i + 1] === '"')) {
+        value += text[i + 1]; i += 2; continue;
+      }
+      if (ch === quote) { quote = null; i++; continue; }
+      if (!quote && (ch === '"' || ch === "'")) { quote = ch; i++; continue; }
+      value += ch; i++;
+    }
+    words.push({ value, start, end: i });
+  }
+  return words;
+}
+
+function executableName(word) {
+  const name = String(word || '').split(/[\\/]/).at(-1).replace(/\.exe$/i, '');
+  return /^[A-Za-z][A-Za-z0-9_.-]*$/.test(name) ? name.toLowerCase() : null;
+}
+
+// Strip repeatable assignments and standard wrappers, and normalize an executable path.
 export function head(seg) {
-  let s = seg;
-  // KEY=val ... (repeatable)
-  s = s.replace(/^(?:[A-Za-z_][\w]*=(?:"[^"]*"|'[^']*'|\S+)\s+)+/, '');
-  // process wrappers
-  s = s.replace(/^(?:nohup|time|stdbuf(?:\s+-\S+)*|nice(?:\s+-n\s+\d+)?|ionice(?:\s+-\S+)*|timeout\s+\S+)\s+/i, '');
-  // sudo is a prefix, not a command of its own — look at what follows it
-  s = s.replace(/^sudo\s+(?:-\S+\s+)*/i, '');
-  return s.trim();
+  let s = String(seg || '').trim();
+  for (;;) {
+    const previous = s;
+    s = s.replace(/^(?:[A-Za-z_][\w]*=(?:"[^"]*"|'[^']*'|\S+)\s+)+/, '');
+    const source = s;
+    const words = commandWords(s), name = executableName(words[0]?.value);
+    if (name) s = name + s.slice(words[0].end);
+    s = s.replace(/^(?:nohup|time|stdbuf(?:\s+-\S+)*|nice(?:\s+-n\s+-?\d+)?|ionice(?:\s+-\S+)*|timeout\s+\S+)\s+/i, '');
+    s = s.replace(/^sudo\s+(?:-\S+\s+)*/i, '');
+    if (name === 'command' || name === 'exec' || name === 'builtin') {
+      let index = 1;
+      if (name === 'command' && ['-v', '-V'].includes(words[index]?.value)) return s.trim();
+      while (words[index]?.value.startsWith('-')) {
+        const flag = words[index++].value;
+        if (flag === '--') break;
+        if (name === 'exec' && flag === '-a') index++;
+      }
+      s = words[index] ? source.slice(words[index].start) : '';
+    } else if (name === 'env') {
+      let index = 1;
+      while (words[index]) {
+        const value = words[index].value;
+        if (value === '--') { index++; break; }
+        if (value === '-S' || value === '--split-string') {
+          const script = words[index + 1];
+          s = script ? script.value + source.slice(script.end) : '';
+          index = -1; break;
+        }
+        if (['-u', '--unset', '-C', '--chdir'].includes(value)) { index += 2; continue; }
+        if (value.startsWith('-') || /^[A-Za-z_][\w]*=/.test(value)) { index++; continue; }
+        break;
+      }
+      if (index !== -1) s = words[index] ? source.slice(words[index].start) : '';
+    }
+    s = s.trim();
+    if (s === previous || !s) return s;
+  }
+}
+
+function shellCommand(seg) {
+  const words = commandWords(seg), name = executableName(words[0]?.value);
+  if (['powershell', 'pwsh'].includes(name)) {
+    for (let i = 1; i < words.length; i++) {
+      const option = words[i].value;
+      // File terminates host option parsing; subsequent -Command/-EncodedCommand are script data.
+      if (!/^[-/\u2013\u2014]/.test(option)) return null;
+      const flag = option.slice(1).toLowerCase();
+      if (!flag) return null;
+      const matches = full => full.startsWith(flag);
+      if (matches('file')) return null;
+      if (matches('encodedcommand') || flag === 'ec') {
+        const encoded = (words[i + 1]?.value || '').replace(/\s+/g, '');
+        if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) return null;
+        const bytes = Buffer.from(encoded, 'base64');
+        if (!bytes.length || bytes.length % 2 || bytes.toString('base64') !== encoded) return null;
+        return bytes.toString('utf16le');
+      }
+      if (matches('command')) {
+        const script = words[i + 1];
+        return script ? script.value + seg.slice(script.end) : null;
+      }
+      if (['executionpolicy', 'inputformat', 'outputformat', 'configurationname', 'psconsolefile',
+        'version', 'windowstyle', 'encodedarguments'].some(matches) || ['ep', 'if', 'of', 'ea'].includes(flag)) i++;
+    }
+    return null;
+  }
+  for (let i = 1; i < words.length; i++) {
+    const option = words[i].value;
+    if (option === '--') return null;
+    if (['bash', 'sh', 'zsh', 'dash', 'ksh'].includes(name) && /^-[A-Za-z]*c[A-Za-z]*$/.test(option)) {
+      return words[i + 1]?.value ?? null;
+    }
+    if (name === 'cmd' && /^\/[ck]$/i.test(option)) {
+      const script = words[i + 1];
+      if (!script) return null;
+      return script.value + seg.slice(script.end);
+    }
+  }
+  return null;
+}
+
+function gitPushArguments(seg) {
+  const words = commandWords(seg).map(word => word.value);
+  if (words[0] !== 'git') return null;
+  const withValue = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--exec-path']);
+  let i = 1;
+  while (i < words.length) {
+    if (words[i] === 'push') return words.slice(i + 1);
+    if (withValue.has(words[i])) { i += 2; continue; }
+    if (/^(?:--[\w-]+(?:=.+)?|-[Cc].+)$/.test(words[i])) { i++; continue; }
+    return null;
+  }
+  return null;
 }
 
 // A target whose destruction means losing the machine: the filesystem root, a drive root, or the
 // entire home directory. A path like `~/projects/build` or `C:\project\build` does NOT match —
 // that is a working directory and cleaning it is legitimate.
 const FATAL_TARGET =
-  /(?:^|\s)["']?(?:\/|\/\*|~|~\/\*|\$HOME(?:\/\*)?|\$\{HOME\}(?:\/\*)?|[A-Za-z]:[\\/]\*?|%USERPROFILE%|\$env:USERPROFILE)["']?(?:\s|$)/i;
+  /(?:^|\s)["']?(?:\/|\/\*|~\/?|~\/\*|\$HOME(?:\/\*?)?|\$\{HOME\}(?:\/\*?)?|[A-Za-z]:[\\/]\*?|%USERPROFILE%|\$env:USERPROFILE)["']?(?:\s|$)/i;
+// v1.25.0: `~/` and `$HOME/` are the home directory too — `rm -fr ~/` used to pass while `rm -rf ~`
+// was refused. A path INSIDE home (`~/projects/build`) still does not match.
+
+// What makes a push a force push: --force (not -with-lease / -if-includes), -f alone or inside a
+// short-flag cluster (-uf), --mirror, or a refspec starting with `+`.
+const FORCE_PUSH = /(?:^|\s)(?:--force(?![-\w])|-[a-zA-Z]*f[a-zA-Z]*\b|--mirror\b|\+[^\s+]+)/;
 
 // Destructive check for a SINGLE segment. Returns a reason or null.
 // A rule's level decides what the guard may do about it (v1.11.0).
@@ -70,7 +191,11 @@ export function segmentVerdict(rawSeg, { advisory = false } = {}) {
   const seg = head(rawSeg);
 
   // 1. Filesystem destruction — POSIX (`rm -r` targeting root or home).
-  if (/^rm\b/i.test(seg) && /(?:^|\s)-\w*r/i.test(seg) && FATAL_TARGET.test(seg))
+  const rmOptions = commandWords(seg).slice(1).map(word => word.value);
+  const optionEnd = rmOptions.indexOf('--');
+  const recursive = (optionEnd === -1 ? rmOptions : rmOptions.slice(0, optionEnd))
+    .some(option => /^-[^-]*r/i.test(option) || option === '--recursive');
+  if (/^rm\b/i.test(seg) && recursive && FATAL_TARGET.test(seg))
     return { level: HARD, reason: 'deleting the root or home directory in full — the machine will not recover' };
 
   // 1b. The same thing in Windows syntax.
@@ -78,8 +203,15 @@ export function segmentVerdict(rawSeg, { advisory = false } = {}) {
     return { level: HARD, reason: 'deleting a drive root or the entire home folder — the machine will not recover' };
 
   // 2. Formatting and wiping disks — irreversible whatever the target.
+  // The standalone Windows help query only prints usage; it has no volume target.
+  if (/^format(?:\.com)?\s+\/\?\s*$/i.test(seg)) return null;
   if (/^(?:format-volume|clear-disk|format|mkfs(?:\.\w+)?|diskpart)\b/i.test(seg))
     return { level: HARD, reason: 'formatting or wiping a disk' };
+  // 2b. v1.25.0: writing raw bytes over a whole block device wipes it just as surely as formatting,
+  //     and `dd of=/dev/sda` was allowed. Reading FROM a disk (`if=/dev/sda`) and writing to an image
+  //     file are ordinary and stay allowed.
+  if (/^dd\b/i.test(seg) && /(?:^|\s)of=\/dev\/(?:sd|hd|vd|xvd|nvme|mmcblk|disk|rdisk|loop)\w*/i.test(seg))
+    return { level: HARD, reason: 'writing raw bytes over a whole disk — it is wiped' };
 
   // 3. Selecting agent processes BY NAME and killing them: this takes down every Claude Code
   //    session and the supervisor itself — i.e. it cuts the loop. Killing ONE process by its id
@@ -121,7 +253,15 @@ export function segmentVerdict(rawSeg, { advisory = false } = {}) {
   //    that appeared after your last fetch, which makes it the careful form and the ordinary way to
   //    push a rebased branch of your own. Blocking it alongside the blind form cost a turn on a
   //    routine operation while preventing nothing.
-  if (/^git\s+push\b/i.test(seg) && /(?:^|\s)(--force(?!-with-lease)\b|-f\b)/i.test(seg))
+  //
+  //    v1.25.0 — stated at the level of the danger, like the taskkill rule. The final audit found
+  //    three spellings of a force push that walked through: a `+` before the refspec
+  //    (`git push origin +main` is exactly --force for that ref), `--mirror` (force-updates and
+  //    deletes remote refs), and global options before the subcommand (`git -C repo push -f`). And
+  //    one false refusal: `--force-if-includes` alone is a no-op modifier of --force-with-lease, but
+  //    `--force\b` matched its prefix.
+  const pushArgs = gitPushArguments(seg);
+  if (pushArgs && pushArgs.some(argument => FORCE_PUSH.test(argument)))
     return { level: CONFIRMABLE, reason: 'git push that force-overwrites shared history' };
 
   if (!advisory) return null;
@@ -208,6 +348,32 @@ export function stripHeredocBodies(command) {
     const line = lines[i];
     kept.push(line);
     i++;
+    // A PowerShell single-quoted here-string is literal data. Its internal quotes
+    // must not invert the shell splitter. A shell/IEX consumer instead executes
+    // that data, so inspect the body as commands. Expandable @" strings are not treated as literal data: PowerShell
+    // can execute substitutions while constructing them.
+    const literal = /@'\s*\r?$/.exec(line);
+    if (literal) {
+      let end = i;
+      while (end < lines.length && !/^'@(?=$|[\s|;&])/.test(lines[end])) end++;
+      if (end < lines.length) {
+        const tail = lines[end].slice(2);
+        const consumer = /^\s*\|\s*([^\s;|&]+)/.exec(tail);
+        const name = executableName(consumer?.[1]);
+        const prefixName = executableName(commandWords(head(line.slice(0, literal.index)))[0]?.value);
+        const executed = ['iex', 'invoke-expression', 'powershell', 'pwsh', 'bash', 'sh', 'zsh', 'dash', 'ksh', 'cmd'].includes(name)
+          || ['iex', 'invoke-expression'].includes(prefixName);
+        const data = !executed && (['node', 'python', 'python3', 'set-content', 'add-content', 'out-file', 'write-output', 'tee-object'].includes(name)
+          || ['set-content', 'add-content', 'out-file', 'write-output'].includes(prefixName));
+        if (executed || data) {
+          kept[kept.length - 1] = line.slice(0, literal.index) + (data ? "''" : '');
+          if (executed) kept.push(...lines.slice(i, end));
+          kept.push(tail);
+          i = end + 1;
+          continue;
+        }
+      }
+    }
     const opener = /<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1/.exec(line);
     if (!opener) continue;
     const marker = opener[2];
@@ -244,7 +410,7 @@ export function waitingVerdict(command) {
       level: ADVISORY,
       reason: 'a shell loop that polls with sleep blocks the turn — and a turn is the loop\'s only ' +
         'spendable resource. If the job it waits for dies, the loop waits for ever. Start it in the ' +
-        'background, record it under running_jobs in docs/STATE.md, and end the turn: the next turn ' +
+        'background, record it under running_jobs in the state role, and end the turn: the next turn ' +
         'sees whether it is running, finished or dead',
     };
   }
@@ -254,7 +420,7 @@ export function waitingVerdict(command) {
       return {
         level: ADVISORY,
         reason: `sleeping ${m[1]} seconds spends a turn on nothing. Record the work under ` +
-          'running_jobs in docs/STATE.md and end the turn — the loop is a better timer than sleep, ' +
+          'running_jobs in the state role and end the turn — the loop is a better timer than sleep, ' +
           'because it can do other work between checks',
       };
     }
@@ -273,12 +439,20 @@ export function destructiveReason(command) {
 export function destructiveVerdict(command, { advisory = false } = {}) {
   if (!command || typeof command !== 'string') return null;
   const stripped = stripHeredocBodies(command);
-  for (const seg of splitSegments(stripped)) {
-    const v = segmentVerdict(seg, { advisory });
-    if (v) return v;
+  const pending = [stripped];
+  let strongest = null;
+  while (pending.length) {
+    for (const seg of splitSegments(stripHeredocBodies(pending.pop()))) {
+      const v = segmentVerdict(seg, { advisory });
+      // A later hard rule must not be hidden by a confirmed force push or an advisory prefix.
+      if (v?.level === HARD) return v;
+      if (v && (!strongest || (strongest.level === ADVISORY && v.level === CONFIRMABLE))) strongest = v;
+      const nested = shellCommand(head(seg));
+      if (nested && nested.length < seg.length) pending.push(nested);
+    }
   }
   // Whole-command rules last: a real danger outranks a note about wasted time.
-  return advisory ? waitingVerdict(stripped) : null;
+  return strongest || (advisory ? waitingVerdict(stripped) : null);
 }
 
 // The confirmation an agent attaches to a command it has reconsidered and still wants to run.

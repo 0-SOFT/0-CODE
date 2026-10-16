@@ -2,6 +2,25 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseYaml, parseScalarOrInline, serializeYaml, serializeScalar } from '../../lib/yaml-mini.mjs';
 
+test('special YAML keys stay literal own data through nested and list round-trips', () => {
+  const parsed = parseYaml('__proto__:\n  blockers: ["nested"]\nconstructor:\n  prototype:\n    marker: ordinary\nitems:\n  - __proto__: {"marker":"list"}\n    other: value\n');
+  assert.equal(Object.getPrototypeOf(parsed), Object.prototype);
+  assert.ok(Object.hasOwn(parsed, '__proto__'));
+  assert.equal(parsed.blockers, undefined);
+  assert.deepEqual(parsed.__proto__.blockers, ['nested']);
+  assert.ok(Object.hasOwn(parsed.items[0], '__proto__'));
+  assert.equal(Object.getPrototypeOf(parsed.items[0]), Object.prototype);
+  assert.deepEqual(parseYaml(serializeYaml(parsed)), parsed);
+  assert.equal(Object.prototype.marker, undefined);
+});
+
+test('nested mapping and array fields inside a list retain hierarchy and sibling fields', () => {
+  for (const details of [{ marker: 'value', flags: { enabled: true } }, [{ nested: { marker: 1 }, value: 2 }]]) {
+    const original = { items: [{}, { details, other: 'data' }, { details: {}, other: 'next' }] };
+    assert.deepEqual(parseYaml(serializeYaml(original)), original);
+  }
+});
+
 test('parseScalarOrInline: scalars', () => {
   assert.equal(parseScalarOrInline('null'), null);
   assert.equal(parseScalarOrInline('~'), null);
@@ -45,6 +64,15 @@ test('round-trip: serialize → parse preserves the values', () => {
   };
   const back = parseYaml(serializeYaml(obj));
   assert.deepEqual(back, obj);
+});
+
+test('round-trip: scalar string types and bytes survive mappings and both array forms', () => {
+  const values = ['', '-42', '-3.5', '-0', '"literal"', "'literal'", '\tx', 'x\t',
+    'x\r', 'x\ry', 'x\ny', 'x\u2028y', 'x\u2029y', '\u0000', 'plain'];
+  for (const value of values) {
+    const original = { value, nested: { value }, inline: [value], block: [{ value }, {}] };
+    assert.deepEqual(parseYaml(serializeYaml(original)), original, JSON.stringify(value));
+  }
 });
 
 test('parseYaml: a numeric key and null values', () => {

@@ -36,7 +36,7 @@
 |---|---|---|
 | Auto-compaction fires | Important state lives in `docs/STATE.md`, which the orchestrator re-reads on the next iteration. Work continues from the same step. | None needed. |
 | The session crashed | A new session **adopts** the loop: a stale `last_session_id` is not treated as a conflict, because a crashed process must not stop autonomy forever. | None needed. For a process-level restart use a supervisor. |
-| `docs/STATE.md` is corrupt | The hook fails open. A ring buffer of backups (`STATE.md.bak.1..5`) is written before every change. | `cp docs/STATE.md.bak.1 docs/STATE.md`, or restore from git. |
+| `docs/STATE.md` cannot be read or its frontmatter cannot be parsed | The Stop hook ends the session without a continuation; the supervisor refuses the unreadable state. A parsed nonempty `blockers` value, including a string or an unclosed-array token, instead triggers the normal blocker stop in both drivers. A ring buffer of backups (`STATE.md.bak.1..5`) is written before every change. | `cp docs/STATE.md.bak.1 docs/STATE.md`, or restore from git after checking the cause. |
 
 ## 4. The loop and blockers
 
@@ -49,8 +49,8 @@
 | An additive config file is replaced instead of merged | It is not any more: `.gitignore` and `.gitattributes` are merged, existing lines untouched. A rule that survives only in a `.bak` copy protects nothing — in one live project the lost rule was the one hiding a file of root passwords. | Files the installer *does* replace are listed in their own block of the summary, each with its backup. |
 | **A documented behaviour is implemented by only some drivers** | A guard fails when a driver does not reach the shared implementation. The promise about progress measurement was false for the default engine across five releases because nothing compared the document with the code. | Wire the driver to the shared module. Do not write a second implementation: two of anything is the drift class this project keeps closing. |
 | The iteration or budget cap is reached | A blocker with the cause, plus a notification. | Raise the cap in `docs/STATE.md` or stop deliberately. |
-| **No cap is set at all** (the default since v1.9.0) | Nothing stops the loop but a blocker or a finished roadmap. This is the intended state: a limit belongs to whoever wants one. | Set `max_iterations` to a positive number, and `budget_metrics.cap_usd` for spending. |
-| **A spending cap is set but never fires** | Expected under the Stop hook: `version_cost_usd` is written by `core/supervisor.mjs` alone, so in interactive mode the counter stays at 0. The loop now says so in every continuation instead of leaving the cap to look like a guard. | Run the loop through the supervisor if you need the cap enforced, or use the iteration cap instead. |
+| **No cap is set at all** (the default since v1.9.0) | Nothing stops the loop but a blocker or a finished roadmap. This is the intended state: a limit belongs to whoever wants one. | Set `max_iterations` to a positive number. Use `budget_metrics.cap_usd` only with engines reporting USD; Codex refuses a positive dollar cap before work starts. |
+| **A spending cap is set but never fires** | Expected under the Stop hook: `version_cost_usd` is written by `core/supervisor.mjs` alone, so in interactive mode the counter stays at 0. The loop now says so in every continuation instead of leaving the cap to look like a guard. | Use the supervisor with an engine reporting USD if the spending cap is needed. Codex reports tokens without USD and refuses a positive `budget_metrics.cap_usd`; use `max_iterations` instead. |
 | **An iteration cap above `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`** | The backstop stops the session first, so the cap you set is not the one that applies. The loop names this in the continuation. | Raise the backstop in `core/loop-limits.mjs` and regenerate the settings, or lower the cap. |
 | **A second loop is started on the same project** | The file lock refuses the second launch and names the current owner; a dead or quiet owner is taken over instead. Until v1.14.0 this held for the supervisor only: the Stop hook recorded its own process number, which is dead milliseconds later, so every extra Claude Code session took the loop from the previous one. Liveness is now proved by something that lives as long as the claimant — the session transcript for the hook, the process for the supervisor. | None needed. To force a take-over, delete `docs/.loop.lock`. |
 | An empty `next_step_prompt` | The loop does **not** stop — this means "decide from STATE and ROADMAP". A generic instruction is substituted. | To stop the loop, write a blocker. |
@@ -92,8 +92,8 @@ and it would be dishonest to ship it under the old name.
 | **The engine runs in the wrong project** | Closed in v1.15.0, after it happened. `cwd` defaulted to `process.cwd()`, so a supervisor launched from one directory with `--state` pointing at another drove one project while running the engine inside a different one — in the incident, a real Claude Code session started inside the framework repository, on an instruction meant for elsewhere, beside a session already working there. The project is now derived from the state file (`dirname(dirname(stateFile))`), the same source the lock uses. | Pass `--cwd` only when the state file genuinely lives outside its project. |
 
 | **A permission prompt appears even under bypassPermissions** | Nothing the framework can do at run time: an `ask` rule in the settings outranks every mode AND the hook's decision. | `node tools/doctor-permissions.mjs <project>` names the cause; `node tools/gen-settings.mjs --project <project>` removes it, with a backup. Settings are read at session start, so restart afterwards. |
-| **`SAFETY_GUARD_MODE` was set and nothing changed** | An unrecognised value keeps the safe default. Since v1.10.0 the guard writes the substitution to stderr instead of swallowing it. | Use one of `arbiter`, `guard-only`, `allow-all`. The acting mode is also written to `~/.claude/safety-guard.log`. |
-| **`AGENT_BACKEND` was set and the other engine ran** | Fixed in v1.10.0: a value that is set but not supported is now refused. It used to fail the supported-list test quietly and fall through to auto-detection, so a typo ran Claude while you expected OpenCode. | Use `claude` or `opencode` exactly, or unset the variable for auto-detection. |
+| **`SAFETY_GUARD_MODE` was set and nothing changed** | An unrecognised value keeps the safe default. Since v1.10.0 the guard writes the substitution to stderr instead of swallowing it. | Use one of `arbiter`, `guard-only`, `allow-all`, `confirm`. The acting mode is also written to `~/.claude/safety-guard.log`. |
+| **`AGENT_BACKEND` was set and the other engine ran** | Fixed in v1.10.0: a value that is set but not supported is now refused. It used to fail the supported-list test quietly and fall through to auto-detection, so a typo ran Claude while you expected OpenCode. | Use `claude`, `opencode` or `codex` exactly, or unset the variable for auto-detection. |
 
 ### A cleanup that destroyed somebody else's work (v1.15.0)
 
@@ -170,8 +170,9 @@ matter more to you than running inside an interactive session, that is the reaso
 
 ## Recovery principles
 
-1. **Fail open.** A hook must never block the agent with its own error. If the hook cannot
-   understand the state, it allows the session to end.
+1. **Stop-hook errors allow the session to end.** An unreadable or unparseable STATE produces no
+   continuation; a parsed nonempty blocker uses the ordinary stop gate. This loop-driver policy
+   does not promise that the external Codex PreToolUse safety hook allows a command on an error.
 2. **Atomic state.** Every write to `docs/STATE.md` goes through a temporary file plus rename,
    with a backup taken beforehand.
 3. **A blocker is a resource problem, not an excuse.** Before recording one, the orchestrator

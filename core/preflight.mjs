@@ -24,14 +24,15 @@
 //     run over that would be wrong, but the human should know.
 
 export const PREFLIGHT_PROMPT = 'Reply with one word: OK';
-export const PREFLIGHT_TIMEOUT_MS = 3 * 60 * 1000;
+import { DEFAULT_TURN_TIMEOUT_MS } from './engine-settings.mjs';
+export const PREFLIGHT_TIMEOUT_MS = DEFAULT_TURN_TIMEOUT_MS;
 
 /**
  * Assessment of the probe turn. A pure function — the whole substance of the check lives here, so
  * it is covered by tests without launching a real engine.
  * @returns {{ok: boolean, problems: string[], notes: string[]}}
  */
-export function assessProbe(turn) {
+export function assessProbe(turn, { backendId } = {}) {
   const problems = [], notes = [];
   if (!turn || typeof turn !== 'object') {
     return { ok: false, problems: ['the engine returned no result at all'], notes };
@@ -48,7 +49,10 @@ export function assessProbe(turn) {
     if (turn.sessionId === undefined || turn.sessionId === null || turn.sessionId === '') {
       notes.push('the answer carries no session id — the format may have changed');
     }
-    if (typeof turn.costUsd !== 'number') {
+    if (backendId === 'codex') {
+      if (!turn.usageTotal || !turn.usage || turn.formatChanged) problems.push('Codex token-usage schema is unavailable');
+      notes.push('Codex reports tokens, not USD; a dollar spending cap cannot be enforced');
+    } else if (typeof turn.costUsd !== 'number') {
       notes.push('the answer carries no turn cost — spend tracking and the budget guard will not work');
     }
   }
@@ -73,16 +77,24 @@ export function explainFailure({ problems, backendId, model, engineVersion }) {
  * @returns {Promise<{ok, problems, notes, turn, ms}>}
  */
 export async function preflight({
-  backend, model, cwd = process.cwd(), timeoutMs = PREFLIGHT_TIMEOUT_MS,
+  backend, model, effort, sandbox, cwd = process.cwd(), timeoutMs, idleTimeoutMs,
   prompt = PREFLIGHT_PROMPT, now = () => Date.now(),
+  ...engineSettings
 } = {}) {
   const t0 = now();
   let turn = null;
+  let engine = null;
   try {
-    turn = await backend.runTurn({ prompt, cwd, model, timeoutMs });
+    if (typeof backend.checkEngine === 'function') {
+      engine = await backend.checkEngine({ cwd, ...engineSettings });
+      if (!engine.ok) return { ok: false, problems: [engine.error], notes: [], engineVersion: engine.engineVersion,
+        turn, ms: now() - t0 };
+    }
+    turn = await backend.runTurn({ ...engineSettings, prompt, cwd, model, effort, sandbox, timeoutMs, idleTimeoutMs });
   } catch (e) {
     turn = { ok: false, error: `exception while launching: ${e && e.message ? e.message : e}` };
   }
-  const result = assessProbe(turn);
-  return { ...result, turn, ms: now() - t0 };
+  const result = assessProbe(turn, { backendId: backend.id });
+  return { ...result, notes: [...(engine?.notes || []), ...result.notes],
+    ...(engine?.engineVersion ? { engineVersion: engine.engineVersion } : {}), turn, ms: now() - t0 };
 }

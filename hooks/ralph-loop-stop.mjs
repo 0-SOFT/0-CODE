@@ -18,14 +18,15 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parseYaml } from '../lib/yaml-mini.mjs';
 import { decideContinuation } from '../core/gates.mjs';
-import { acquireLock } from '../core/loop-lock.mjs';
+import { acquireLockEventually, LOCK_BUSY } from '../core/loop-lock.mjs';
 import { inspectStateJobs } from '../core/long-jobs.mjs';
 import { captureSnapshot } from '../core/progress.mjs';
 import { escalationDirective } from '../core/progress.mjs';
 import {
-  readMemory, writeMemory, stagnantAfterTurn, ESCALATE_AFTER, BLOCK_AFTER, noProgressBlocker,
+  readMemory, writeMemory, stagnantAfterTurn, progressPolicy, noProgressBlocker,
 } from '../core/turn-progress.mjs';
 import { noticeAfterTurn } from '../core/secret-notice.mjs';
+import { findProjectRoot, loadProjectConfig } from '../core/project-config.mjs';
 
 const HOOK_DIR = dirname(fileURLToPath(import.meta.url));
 const LIB_DIR = join(HOOK_DIR, '..', 'lib');
@@ -52,8 +53,11 @@ const SESSION_ID = hook.session_id ? String(hook.session_id) : '';
 //   2) the native CLAUDE_CODE_STOP_HOOK_BLOCK_CAP=1000 (.claude/settings.json) — Claude Code
 //      force-stops by itself after N consecutive blocks.
 
-const PROJECT_DIR = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-const STATE_FILE = join(PROJECT_DIR, 'docs', 'STATE.md');
+const PROJECT_DIR = process.env.CLAUDE_PROJECT_DIR || findProjectRoot();
+let project;
+try { project = loadProjectConfig({ projectDir: PROJECT_DIR }); }
+catch (error) { process.stderr.write(`ralph-loop-stop: ${error.message} — allowing stop\n`); failOpen(); }
+const STATE_FILE = project.documentPath('state');
 
 // No STATE.md means this is not a framework project — allow the stop.
 if (!existsSync(STATE_FILE)) failOpen();
@@ -69,9 +73,12 @@ let st;
 try { st = parseYaml(m[1]); }
 catch { process.stderr.write('ralph-loop-stop: parse error — allowing stop\n'); failOpen(); }
 if (!st || typeof st !== 'object') failOpen();
+const progressLimits = progressPolicy(st);
+if (progressLimits.warning) process.stderr.write(`ralph-loop-stop: ${progressLimits.warning}\n`);
 
 // Optional Telegram notification (best effort; alerts are optional).
 function notify(subject, body) {
+  if (project.installed && !project.config.modules.telegram) return;
   const tns = join(LIB_DIR, 'telegram-notify.sh');
   if (existsSync(tns) && process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
     try { spawnSync('bash', [tns, subject, body], { stdio: 'ignore', timeout: 15000 }); }
@@ -104,12 +111,15 @@ const LIVENESS = TRANSCRIPT
 
 // acquireLock now recognises a lock that is already ours and simply refreshes it, so one call
 // covers all three cases: free, ours, somebody else's.
-const claimed = acquireLock({
+const claimed = await acquireLockEventually({
   projectDir: PROJECT_DIR, engine: 'stop-hook', sessionId: SESSION_ID, liveness: LIVENESS,
 });
 if (!claimed.acquired) {
+  const conclusion = claimed.state === LOCK_BUSY
+    ? 'Ownership could not be confirmed; this invocation ends without a continuation.'
+    : 'This session is not driving the loop and ends normally.';
   process.stderr.write(
-    `ralph-loop-stop: ${claimed.reason} This session is not driving the loop and ends normally.\n`);
+    `ralph-loop-stop: ${claimed.reason} ${conclusion}\n`);
   failOpen();
 }
 if (claimed.takenOver) process.stderr.write(`ralph-loop-stop: ${claimed.reason}\n`);
@@ -119,7 +129,7 @@ if (claimed.takenOver) process.stderr.write(`ralph-loop-stop: ${claimed.reason}\
 const jobs = inspectStateJobs(st, { cwd: PROJECT_DIR });
 
 const decision = decideContinuation(st,
-  { sessionId: SESSION_ID, driver: 'stop-hook', jobs, projectDir: PROJECT_DIR });
+  { sessionId: SESSION_ID, driver: 'stop-hook', jobs, projectDir: PROJECT_DIR, project });
 
 // A job that died is the case a marker-only wait hangs on for ever, so it is said out loud as well
 // as written into the continuation text.
@@ -160,7 +170,7 @@ if (decision.action === 'stop') {
 // iteration counter and last_action_at, the driver would read its own bookkeeping as the agent's
 // work, and the stall could never be detected. The supervisor guards the same way, for the same
 // reason.
-const DOCS_DIR = dirname(STATE_FILE);
+const DOCS_DIR = project.runtimeDir;
 let stagnantTurns = 0;
 let memory = null;
 let snapshot = null;
@@ -198,7 +208,7 @@ const patchObj = {
 // v1.15.0: the thresholds and the blocker itself live in core/turn-progress.mjs. They used to be
 // the bare numbers 2 and 3, written out in this file AND in the supervisor — one rule in two
 // places, which is the drift class v1.7.1 spent a version closing.
-if (stagnantTurns >= BLOCK_AFTER) patchObj.blockers = [noProgressBlocker(stagnantTurns)];
+if (stagnantTurns >= progressLimits.blockAfter) patchObj.blockers = [noProgressBlocker(stagnantTurns)];
 const patch = JSON.stringify(patchObj);
 const res = spawnSync(process.execPath, [join(LIB_DIR, 'update-state.mjs'), STATE_FILE],
   { input: patch, encoding: 'utf8' });
@@ -219,18 +229,18 @@ catch { /* losing one observation is cheaper than losing the turn */ }
 
 // Three empty turns in a row: the blocker is already written above, so the loop stops here the same
 // way it stops for any other blocker. Escalation was tried and did not help.
-if (stagnantTurns >= BLOCK_AFTER) {
+if (stagnantTurns >= progressLimits.blockAfter) {
   process.stderr.write(`ralph-loop-stop: ${stagnantTurns} turns without measurable progress — no_progress blocker recorded\n`);
   notify('Ralph Loop: no progress',
-    `${stagnantTurns} consecutive turns without progress — a no_progress blocker was written to STATE. See docs/failure-modes.md.`);
+    `${stagnantTurns} consecutive turns without progress — a no_progress blocker was written to the state role. See the failure-mode guide.`);
   failOpen();
 }
 
 // Two empty turns: tell the agent, in the instruction it is about to act on, that its last turns
 // changed nothing. This is the case the loop exists for — an agent that believes it is waiting for
 // something is unable to notice that nothing is coming.
-const reason = stagnantTurns >= ESCALATE_AFTER
-  ? escalationDirective(decision.reason, stagnantTurns)
+const reason = stagnantTurns >= progressLimits.escalateAfter
+  ? escalationDirective(decision.reason, stagnantTurns, project.documentRelative('state'))
   : decision.reason;
 
 // Emit decision:block so that Claude continues.

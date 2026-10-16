@@ -42,6 +42,10 @@
       }
     ]
   },
+  "statusLine": {
+    "type": "command",
+    "command": "${CLAUDE_PROJECT_DIR}/hooks/run-hook.cmd usage-statusline"
+  },
   "permissions": {
     "defaultMode": "bypassPermissions",
     "allow": [
@@ -94,15 +98,6 @@
       "Bash(pwd)",
       "Bash(curl https://api.telegram.org/*)"
     ],
-    "deny": [
-      "Bash(rm -rf /)",
-      "Bash(rm -rf /*)",
-      "Bash(rm -rf ~)",
-      "Bash(rm -rf ~/*)",
-      "Bash(sudo rm -rf /*)",
-      "Bash(sudo rm -rf ~*)",
-      "Bash(git push --force*)",
-      "Bash(git push -f *)"
-    ]
+    "deny": []
   }
 }

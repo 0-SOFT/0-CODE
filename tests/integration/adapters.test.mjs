@@ -1,3 +1,4 @@
+import { cleanupTempDirSync } from '../helpers/index.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs';
@@ -13,9 +14,9 @@ test('ClaudeBackend.installInstructions → CLAUDE.md', async () => {
   const d = tmp();
   try {
     const r = await new ClaudeBackend().installInstructions({ targetDir: d, content: 'CONTENT' });
-    assert.equal(readFileSync(join(d, 'CLAUDE.md'), 'utf8'), 'CONTENT');
+    assert.match(readFileSync(join(d, 'CLAUDE.md'), 'utf8'), /<!-- BEGIN AUTONOMOUS FRAMEWORK -->\nCONTENT\n<!-- END AUTONOMOUS FRAMEWORK -->/);
     assert.ok(r.written[0].endsWith('CLAUDE.md'));
-  } finally { rmSync(d, { recursive: true, force: true }); }
+  } finally { cleanupTempDirSync(d); }
 });
 
 test('ClaudeBackend.applyPermissions → .claude/settings.json + merge/dedupe', async () => {
@@ -27,7 +28,7 @@ test('ClaudeBackend.applyPermissions → .claude/settings.json + merge/dedupe', 
     const s = JSON.parse(readFileSync(join(d, '.claude', 'settings.json'), 'utf8'));
     assert.deepEqual(s.permissions.allow.sort(), ['Bash(git *)', 'Bash(ls)']); // deduplication
     assert.deepEqual(s.permissions.deny, ['Bash(rm *)']);
-  } finally { rmSync(d, { recursive: true, force: true }); }
+  } finally { cleanupTempDirSync(d); }
 });
 
 test('ClaudeBackend.guardCommand + id', () => {

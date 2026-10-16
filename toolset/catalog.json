@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "based_on": "v1.30.0",
+  "elements": [
+    {
+      "id": "mcp/context7",
+      "kind": "mcp",
+      "name": "context7",
+      "source": "config/mcp-manifest.json",
+      "status": "default",
+      "compatibility": {
+        "claude": "native",
+        "codex": "native-adapter",
+        "opencode": "native-adapter"
+      },
+      "secrets": [],
+      "reason": "Local development server; no external API credential required. Check or install its tested minimum npm package first."
+    },
+    {
+      "id": "mcp/playwright",
+      "kind": "mcp",
+      "name": "playwright",
+      "source": "config/mcp-manifest.json",
+      "status": "default",
+      "compatibility": {
+        "claude": "native",
+        "codex": "native-adapter",
+        "opencode": "native-adapter"
+      },
+      "secrets": [],
+      "reason": "Local development server; no external API credential required. Check or install its tested minimum npm package first."
+    },
+    {
+      "id": "mcp/chrome-devtools",
+      "kind": "mcp",
+      "name": "chrome-devtools",
+      "source": "config/mcp-manifest.json",
+      "status": "default",
+      "compatibility": {
+        "claude": "native",
+        "codex": "native-adapter",
+        "opencode": "native-adapter"
+      },
+      "secrets": [],
+      "reason": "Local development server; no external API credential required. Check or install its tested minimum npm package first."
+    },
+    {
+      "id": "mcp/sequential-thinking",
+      "kind": "mcp",
+      "name": "sequential-thinking",
+      "source": "config/mcp-manifest.json",
+      "status": "default",
+      "compatibility": {
+        "claude": "native",
+        "codex": "native-adapter",
+        "opencode": "native-adapter"
+      },
+      "secrets": [],
+      "reason": "Local development server; no external API credential required. Check or install its tested minimum npm package first."
+    },
+    {
+      "id": "mcp/memory",
+      "kind": "mcp",
+      "name": "memory",
+      "source": "config/mcp-manifest.json",
+      "status": "default",
+      "compatibility": {
+        "claude": "native",
+        "codex": "native-adapter",
+        "opencode": "native-adapter"
+      },
+      "secrets": [],
+      "reason": "Local development server; no external API credential required. Check or install its tested minimum npm package first."
+    }
+  ]
+}

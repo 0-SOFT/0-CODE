@@ -33,7 +33,7 @@ test('autodetectBackendId: an empty env → the claude default', () => {
 });
 
 test('SUPPORTED_BACKENDS', () => {
-  assert.deepEqual(SUPPORTED_BACKENDS, ['claude', 'opencode']);
+  assert.deepEqual(SUPPORTED_BACKENDS, ['claude', 'opencode', 'codex']);
 });
 
 // v1.3.0: the second engine plugs into the same Backend port.

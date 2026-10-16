@@ -1,7 +1,9 @@
 # Contributing
 
-Thank you for looking. This project has a small number of strong opinions, and knowing them up
-front will save you time.
+Work from the public source at [0-SOFT/0-CODE](https://github.com/0-SOFT/0-CODE).
+It supports Claude Code, Codex and OpenCode with one shared core. Integration into
+an existing project uses [INTEGRATE](INTEGRATE.md) and the `.0-code/` namespace;
+[PROJECT_SETTINGS](docs/PROJECT_SETTINGS.md) defines the configuration contract.
 
 ---
 
@@ -22,15 +24,66 @@ you change documentation, check that the code still does what the new sentence s
 
 ```bash
 node tests/run.mjs --coverage-min=80    # the whole suite, plus the coverage gate
-bash tests/smoke.sh                     # end-to-end checks; a fresh clone announces the ones it skips
+bash tests/smoke.sh                     # isolated lifecycle and guard checks
+node tools/gen-ignore.mjs --check       # generated ignore policy agrees with its source
 ```
 
-The six skipped checks are expected: they need artefacts that exist only in a maintainer's working
-checkout (a live capability catalogue, a personal toolset snapshot). They are printed by name, never
-silently — if the number grows, something stopped being published.
+The public catalog contains five default MCP definitions: context7, playwright,
+chrome-devtools, sequential-thinking and memory. Private skill, agent, command and
+rule bodies, their generators and tests requiring that corpus are excluded. The
+smoke script explicitly reports the absent private tool-corpus lifecycle check;
+do not claim that public results validate excluded workflows. Selected MCP npm
+versions are tested SemVer minima, so preserve valid newer packages. These five
+need no external API key; browser tools need a browser. Optional account examples
+require explicit configuration and authorization. A green doctor proves local
+prerequisites rather than live connections.
 
-Both must be green on your platform. If you can, run them on the other one too — several bugs in
-this repository existed only on Windows or only on POSIX.
+Automatic root-based 1.x migration needs `config/legacy-installations.json`, which
+is excluded. Do not add deletion based only on filenames or promise migration from
+this checkout without ownership evidence. New installations and `.0-code/` upgrades
+remain supported.
+
+The compatibility matrix is Node.js **20, 22 and 24** on Windows and Linux; CI is configured to run
+the full suite, coverage gate and smoke checks in all six cells. A workflow change
+does not prove those jobs ran: report pending, failed or unavailable CI explicitly.
+Node.js 20 remains the compatibility minimum; do not infer exact patch coverage
+from a major-version result.
+
+For release acceptance, run the full default suite three consecutive times on
+**each of Node 22 and 24**, with `--coverage-min=80`, and smoke on both. Repeat the
+full suite and smoke from a clean public checkout on both versions. Run at least
+the process and lifecycle CLI tests on Node 20, plus any other supported versions
+installed on the machine. Do not reduce test concurrency or disable scenarios to
+obtain a passing result. Missing local platforms remain explicit evidence gaps.
+
+Record the revision, OS, exact Node version, executable path, commands, logs and
+results for every cell. Select each runtime by its explicit executable path and
+prepend its directory to the child check's `PATH`; verify `process.version` and
+`process.execPath` **inside Bash** before smoke, whose `node` commands use `PATH`.
+An absolute path to the parent runner alone does not select child runtimes. If
+Node 20 is missing, unpack an official archive in scratch, verify its SHA-256
+against the release's SHASUMS256 file, and record both; never install globally.
+Windows process regressions must demonstrate failure on the old implementation
+and success on all three versions, including actual asynchronous metadata and
+complete stdout/stderr after normal exit.
+
+In addition to isolated checks, exercise `scan/install/doctor/uninstall` from a
+clean public copy under the machine's normal Node 22 environment, with toolset
+disabled and a disposable project. Preserve personal profiles and authentication;
+verify real prerequisites with doctor and compare project bytes before/after.
+
+Use temporary projects and native engine profiles for verification. User-scope
+delivery changes native user tool/MCP settings and is removed separately; choose
+scope explicitly. Never copy authentication or replace the owner's model/effort
+preferences just to make a test pass. Precedence is flags, environment, project
+configuration, then native engine settings. See [ENGINE_SETTINGS](docs/ENGINE_SETTINGS.md).
+Keep development reports and logs private; role paths in project configuration
+still describe documents the installed product creates.
+
+When README meaning changes, update all ten translations against the actual
+English paragraphs before updating their `tracks` digest. The translation check
+detects stale markers; it cannot assess meaning or prose quality. Run
+`node --test tests/unit/translations.test.mjs` and review links and claims as well.
 
 ---
 

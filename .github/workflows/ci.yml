@@ -7,19 +7,24 @@ on:
 
 jobs:
   test:
-    name: ${{ matrix.os }}
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        node: [20, 22, 24]
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ matrix.node }}
+
+      - name: Record the runtime used by Bash and child commands
+        shell: bash
+        run: node -p 'JSON.stringify({version:process.version,executable:process.execPath,platform:process.platform})'
 
       # jq is used by the session logger hook; the smoke suite checks for it.
       - name: Install jq (Linux)

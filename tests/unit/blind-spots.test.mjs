@@ -1,12 +1,18 @@
+import { cleanupTempDirSync } from '../helpers/index.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { autodetectBackendId } from '../../core/backend-factory.mjs';
 import { resolveMode } from '../../core/permission-decision.mjs';
 import { KNOWN_STEP_TYPES } from '../../core/model-routing.mjs';
+import { assembleInstallationBundle } from '../../core/installation-bundle.mjs';
+import { normalizeProjectConfig } from '../../core/project-config.mjs';
+import { installProject } from '../../core/project-installation.mjs';
+import { PROJECT_MODULES } from '../../core/project-modules.mjs';
+import { readFrontmatter } from '../helpers/index.mjs';
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
@@ -33,19 +39,17 @@ test('blind spot: every file referenced by a script exists', () => {
 
 // Class 2: a documentation claim diverges from the behaviour.
 // A real case: the README promised that bootstrap copies templates/ — it does not.
-test('blind spot: the README does not promise copying that bootstrap never performs', () => {
-  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
-  const bootstrap = readFileSync(join(ROOT, 'bootstrap.sh'), 'utf8');
-  const block = readme.slice(readme.indexOf('Bootstrap:'), readme.indexOf('Bootstrap:') + 700);
-  for (const m of block.matchAll(/`([\w.\-]+)\/`/g)) {
-    const directory = m[1];
-    if (directory === 'templates') {
-      assert.ok(/NOT copied/.test(block),
-        'if templates/ is mentioned, the README must explain that it is NOT copied');
+test('blind spot: the complete kernel dependencies and templates exist in the actual installation bundle', () => {
+  const bundle = assembleInstallationBundle(normalizeProjectConfig());
+  for (const path of ['core/gates.mjs','core/safety.mjs','core/project-config.mjs','lib/update-state.mjs',
+    'schemas/config.schema.json','VERSION','templates/cycle.md']) assert.ok(bundle.files.has(path), path);
+  for (const [path, bytes] of bundle.files) {
+    if(!path.endsWith('.mjs')) continue;
+    for(const match of bytes.toString('utf8').matchAll(/^import\s+(?:[\s\S]*?\sfrom\s*)?(['"])(\.[^'"]+)\1/gm)) {
+      const target=join(dirname(path),match[2]).replaceAll('\\','/');
+      assert.ok(bundle.files.has(target), `${path} imports missing ${target}`);
     }
   }
-  // core/ is mandatory: without it both hooks failed silently (a real v1.2.0 defect)
-  assert.match(bootstrap, /core/, 'bootstrap must copy core/');
 });
 
 // Class 3: a method reports success having done nothing.
@@ -64,7 +68,7 @@ test('blind spot: applyPermissions reports honestly', async () => {
     const cfg = JSON.parse(readFileSync(r.file, 'utf8'));
     assert.ok(Object.values(cfg.permission.bash).includes('deny'),
       'a report of applied:true must be backed by real denials in the file');
-  } finally { rmSync(d, { recursive: true, force: true }); }
+  } finally { cleanupTempDirSync(d); }
 });
 
 // Class 4: a notification silently fails to send, and its absence must not break the loop.
@@ -93,31 +97,22 @@ test('blind spot: without tokens the script states the reason and the loop keeps
 // A real case: max_iterations=1000 in a fresh project turned an accidental run into a thousand
 // iterations.
 test('blind spot: a new project is not handed a limit nobody chose', () => {
-  const bootstrap = readFileSync(join(ROOT, 'bootstrap.sh'), 'utf8');
-  const m = bootstrap.match(/^max_iterations:\s*(\S+)/m);
-  assert.ok(m, 'bootstrap must say something about the iteration limit, even if it is "null"');
-
-  // v1.9.0 reversed the v1.4.0 decision on purpose: limits are opt-in, so the default is no cap.
-  // The old danger it guarded against has not gone away — ANY claude launch inside a project
-  // folder joins the loop — but it is now covered by the no-progress detector, which writes a
-  // no_progress blocker after three turns that change nothing. An accidental probe does nothing,
-  // so it stops on its own; what runs unbounded is an agent that keeps making real changes, which
-  // is what the owner asked for.
-  //
-  // The original reasoning still binds anyone who puts a number back: a DEFAULT limit must stay
-  // small, because a large one is a number nobody chose.
-  if (m[1] === 'null') return;
-  const value = Number(m[1]);
-  assert.ok(Number.isFinite(value), `an unexpected default: ${m[1]}`);
-  assert.ok(value <= 50, `a starting limit of ${value} is too high for an accidental run`);
+  const base=join(dirname(ROOT),'scratch','tmp');mkdirSync(base,{recursive:true});
+  const root=mkdtempSync(join(base,'no-default-cap-'));
+  try {
+    installProject(root,{config:{modules:Object.fromEntries(Object.keys(PROJECT_MODULES).map(id=>[id,false]))}});
+    const state=readFrontmatter(join(root,'docs/STATE.md'));
+    assert.equal(Number(state.max_iterations||0)>0,false);
+    assert.equal(state.budget_metrics.cap_usd,null);
+  } finally { cleanupTempDirSync(root); }
 });
 
 // Class 6: a document header falls behind reality.
 // A real case (the v1.5.0 audit): the README declared version 1.0.0 and GUIDELINE declared 0.4.0
 // while the framework had reached 1.4.0. Such a claim goes stale silently because nobody checks it
 // — exactly the class of defect the claims audit exists for.
-test('blind spot: the versions in document headers match plugin.json', () => {
-  const { version } = JSON.parse(readFileSync(join(ROOT, '.claude-plugin', 'plugin.json'), 'utf8'));
+test('blind spot: the versions in document headers match VERSION', () => {
+  const version = readFileSync(join(ROOT, 'VERSION'), 'utf8').trim();
   const majorMinor = version.split('.').slice(0, 2).join('.');   // compare down to the minor version
 
   const readme = readFileSync(join(ROOT, 'README.md'), 'utf8').slice(0, 400);
@@ -125,6 +120,15 @@ test('blind spot: the versions in document headers match plugin.json', () => {
   assert.ok(mReadme, 'the README header must carry a version');
   assert.ok(mReadme[1].startsWith(majorMinor),
     `the README declares ${mReadme[1]} while the framework is at ${version}`);
+
+  // v1.22.0: the translations carry the number too, under their own label. The translation guard no
+  // longer counts it (it changes every release and is not prose), so this is where it is held —
+  // exactly, because a translated header that lags a release is simply wrong.
+  for (const f of readdirSync(ROOT).filter(n => /^README\..+\.md$/.test(n))) {
+    const m = readFileSync(join(ROOT, f), 'utf8').slice(0, 600).match(/\bv(\d+\.\d+\.\d+)\b/);
+    assert.ok(m, `${f} must carry a version in its header`);
+    assert.equal(m[1], version, `${f} declares v${m[1]} while the framework is at ${version}`);
+  }
 
   const guide = readFileSync(join(ROOT, 'GUIDELINE.md'), 'utf8').slice(0, 600);
   const mGuide = guide.match(/\*\*Framework version:\*\*\s*v?([\d.]+)/);

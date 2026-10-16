@@ -24,6 +24,7 @@ import { exceedsBackstop } from './loop-limits.mjs';
 import { summariseJobs, terminalAdvice } from './long-jobs.mjs';
 import { findDecisionFor, summariseDecision } from './decision-record.mjs';
 import { reviewStatus, reviewDirective } from './roadmap-review.mjs';
+import { DOCUMENT_DEFAULTS, loadProjectConfig } from './project-config.mjs';
 
 // Loop "adoption" logic (v0.5.9 — the root fix for continuity):
 // last_session_id in STATE records the last session that WROTE to it, not the live one. When a
@@ -61,13 +62,27 @@ export function minutesSinceAction(st, now = Date.now()) {
   return minutes >= 0 ? minutes : null;      // a clock skew into the future is not silence either
 }
 
+// The blockers in normal form. v1.25.0: only an array used to count, so a blocker written as a
+// string — the shape a person types when stopping the loop by hand — was read as "no blockers", and
+// a broken header (`blockers: [` never closed reaches here as the string "[") kept the loop running
+// on a damaged STATE. Any non-empty value is a blocker; only empty shapes mean "none".
+export function blockerList(value) {
+  const meaningful = v => v !== null && v !== undefined && !(typeof v === 'string' && v.trim() === '');
+  if (Array.isArray(value)) return value.filter(meaningful);
+  return meaningful(value) ? [value] : [];
+}
+
 // v1.16.0: `projectDir` is how the gate can look for a decision record. It is optional, and when
 // it is absent the gate simply says nothing about records rather than guessing at a path — a
 // driver that has not been updated must not start reporting things it cannot know.
-export function decideContinuation(state, { sessionId = '', driver = '', jobs = null, projectDir = null } = {}) {
+export function decideContinuation(state, { sessionId = '', driver = '', jobs = null, projectDir = null,
+  project = null, statePath } = {}) {
   const st = state && typeof state === 'object' ? state : {};
+  project ??= projectDir ? loadProjectConfig({ projectDir }) : null;
+  statePath ??= project?.documentRelative('state') ?? DOCUMENT_DEFAULTS.state.path;
+  const roadmapPath = project?.documentRelative('roadmap') ?? DOCUMENT_DEFAULTS.roadmap.path;
 
-  const blockers = Array.isArray(st.blockers) ? st.blockers : [];
+  const blockers = blockerList(st.blockers);
   const released = st.released_version ? String(st.released_version) : '';
   const current = st.current_version ? String(st.current_version) : '';
   let iteration = parseInt(st.iteration, 10); if (!Number.isFinite(iteration)) iteration = 0;
@@ -88,7 +103,7 @@ export function decideContinuation(state, { sessionId = '', driver = '', jobs = 
     return {
       action: 'stop', stopCause: 'blockers',
       notify: { subject: 'Ralph Loop: blocker detected',
-        body: `Project ${current} has ${blockers.length} blocker(s). See docs/STATE.md.` },
+        body: `Project ${current} has ${blockers.length} blocker(s). See ${statePath}.` },
     };
   }
   // 2. Released == current.
@@ -108,7 +123,7 @@ export function decideContinuation(state, { sessionId = '', driver = '', jobs = 
     };
   }
   // 4. Budget cap (optional).
-  if (budgetCap !== 0 && versionCost >= budgetCap) {
+  if (budgetCap > 0 && versionCost >= budgetCap) {
     return {
       action: 'stop', stopCause: 'budget_cap',
       notify: { subject: 'Ralph Loop: budget exceeded',
@@ -120,9 +135,13 @@ export function decideContinuation(state, { sessionId = '', driver = '', jobs = 
   const nextIter = iteration + 1;
   // session_count only grows when the session changes, not on every iteration.
   const nextCount = (sessionId !== stateSession) ? sessionCount + 1 : sessionCount;
+  // v1.28.0: the agent must see the iteration it can actually read in STATE. The supervisor
+  // launches the work before writing next.iteration; the Stop hook writes it before delivering
+  // its continuation. Keep the historical Stop-hook convention for callers without a driver.
+  const visibleIteration = driver === 'supervisor' ? iteration : nextIter;
   // How the position is reported when there is no cap: saying "8 (no cap)" is the honest
   // form. Printing 8/1000 would put a number in front of the agent that nobody chose.
-  const iterationLabel = maxIter === null ? `${nextIter} (no cap)` : `${nextIter}/${maxIter}`;
+  const iterationLabel = maxIter === null ? `${visibleIteration} (no cap)` : `${visibleIteration}/${maxIter}`;
 
   // The recorded step instruction is used only if it still describes where the loop stands.
   const freshness = checkFreshness(st);
@@ -131,14 +150,14 @@ export function decideContinuation(state, { sessionId = '', driver = '', jobs = 
     ? { why: freshness.why, dropped: freshness.instruction }
     : null;
 
-  const generic = `Continue work according to docs/STATE.md and docs/ROADMAP.md. Read STATE, decide the next step, execute it, update STATE.`;
+  const generic = `Continue work according to ${statePath} and ${roadmapPath}. Read STATE, decide the next step, execute it, update STATE.`;
   const stepInstruction = usable ? freshness.instruction : generic;
 
   // The machine truth goes FIRST and says so. This is what stops a free-text instruction from
   // being the only signal the agent has: whatever the text below claims about blockers or about
   // which version is in flight, the fields say otherwise right above it.
   const header = [
-    '[LOOP STATE — machine truth from docs/STATE.md]',
+    `[LOOP STATE — machine truth from ${statePath}]`,
     `version: ${current || 'unknown'} | stage: ${st.current_stage ?? 'unknown'} | ` +
       `iteration: ${iterationLabel} | blockers: none | ` +
       `prompt file: ${st.current_prompt_file || 'none'}`,
@@ -166,7 +185,7 @@ export function decideContinuation(state, { sessionId = '', driver = '', jobs = 
   const quietFor = minutesSinceAction(st);
   if (quietFor !== null && quietFor > stallMinutes) {
     header.push(
-      `WARNING: docs/STATE.md has not changed for ${Math.round(quietFor)} minutes ` +
+      `WARNING: ${statePath} has not changed for ${Math.round(quietFor)} minutes ` +
       `(threshold ${stallMinutes}). If you are waiting on a background job, check its actual state ` +
       'directly rather than waiting for a notification — a wait that will never end looks exactly ' +
       'like work from here.');
@@ -192,7 +211,8 @@ export function decideContinuation(state, { sessionId = '', driver = '', jobs = 
   // needed a decision record, so it does the one thing that closes the silent case: it says every
   // turn whether one exists. A flat decision can no longer look exactly like a considered one.
   if (projectDir) {
-    header.push(summariseDecision(findDecisionFor(projectDir, current), current));
+    header.push(summariseDecision(findDecisionFor(projectDir, current), current,
+      project.config.documents.decisions.path));
   }
 
   const overBackstop = exceedsBackstop(maxIter);
@@ -211,7 +231,7 @@ export function decideContinuation(state, { sessionId = '', driver = '', jobs = 
     header.push(
       `NOTE: a spending cap of $${budgetCap} is set, but it cannot fire under the Stop hook — ` +
       'nothing fills version_cost_usd in this mode, so it stays at 0. The cap works under ' +
-      'core/supervisor.mjs. See docs/failure-modes.md.');
+      `${project?.installed ? '.0-code/' : ''}core/supervisor.mjs.`);
   }
 
   // v1.16.0 — THE PLAN GETS RE-EXAMINED. When the review is due the step instruction is REPLACED,
@@ -222,7 +242,7 @@ export function decideContinuation(state, { sessionId = '', driver = '', jobs = 
   if (review.due) {
     header.push(`ROADMAP REVIEW DUE: ${review.since} turns since the plan was last checked (threshold ${review.every}). This turn's instruction has been replaced by the review.`);
   }
-  const instructionForTurn = review.due ? reviewDirective(stepInstruction, review) : stepInstruction;
+  const instructionForTurn = review.due ? reviewDirective(stepInstruction, review, roadmapPath) : stepInstruction;
 
   const reason = `${header.join('\n')}\n\n[STEP INSTRUCTION]\n${instructionForTurn}`;
   const systemMessage = `Ralph Loop: iter ${iterationLabel} (v${current})` +

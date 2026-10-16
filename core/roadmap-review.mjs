@@ -28,6 +28,8 @@
 // Ten turns is three to four finished versions at the measured rate of 2–3 turns per version. The
 // alternatives, their scores and the reason arithmetic did not settle it are on disk in the decision
 // record named above — this constant is the conclusion, not the argument.
+import { DOCUMENT_DEFAULTS } from './project-config.mjs';
+
 export const DEFAULT_REVIEW_EVERY = 10;
 
 function intOr(value, fallback) {
@@ -67,17 +69,17 @@ export function reviewStatus(state) {
 }
 
 // The instruction the agent gets instead of the one it was going to get.
-export function reviewDirective(instruction, status) {
+export function reviewDirective(instruction, status, roadmapPath = DOCUMENT_DEFAULTS.roadmap.path) {
   const since = status && Number.isFinite(status.since) ? status.since : 0;
   const every = status && status.every ? status.every : DEFAULT_REVIEW_EVERY;
   return [
     '[ROADMAP REVIEW — this turn, before anything else]',
-    `${since} turns have passed since docs/ROADMAP.md was last checked against what has actually ` +
+    `${since} turns have passed since ${roadmapPath} was last checked against what has actually ` +
       `been built (the threshold is ${every}). Measured across this project's history: no version ` +
       'has EVER been cancelled, dropped or reordered in the roadmap. A plan that never changes ' +
       'across twenty-five releases was either perfect or unexamined.',
     '',
-    'Read the remaining versions in docs/ROADMAP.md against what the finished work has since shown.',
+    `Read the remaining versions in ${roadmapPath} against what the finished work has since shown.`,
     'For each one still ahead, answer: is it still the right thing, in the right order, for the ' +
       'right reason? Has anything learned since made a version unnecessary, or revealed one that is ' +
       'missing? Act on the answer — edit the roadmap.',

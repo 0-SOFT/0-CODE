@@ -30,3 +30,6 @@ ralph-loop-stop text eol=lf
 *.jpeg      binary
 *.gif       binary
 *.ico       binary
+
+# Raw archived tool output is evidence; preserve its original whitespace.
+docs/reports/1.28.0_audit_round*_archive/**/*.log -whitespace

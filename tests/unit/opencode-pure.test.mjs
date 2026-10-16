@@ -113,8 +113,9 @@ test('toOpenCodePermissions: every denial carries over, nothing is lost', () => 
   });
   assert.deepEqual(dropped, [], 'no rule may be dropped silently');
   assert.equal(permission.bash['*'], 'allow', 'ordinary commands are allowed');
-  assert.equal(permission.bash['rm -rf /*'], 'deny');
-  assert.equal(permission.bash['rm -rf ~*'], 'deny');
+  assert.equal(permission.bash['rm -rf /'], 'deny');
+  assert.equal(permission.bash['rm -rf ~'], 'deny');
+  assert.equal(permission.bash['rm -rf /*'], undefined);
   assert.equal(permission.bash['git push --force*'], 'deny');
 });
 
@@ -122,7 +123,7 @@ test('toOpenCodePermissions: denials come AFTER the permissive rule', () => {
   const { permission } = toOpenCodePermissions({ allow: [], deny: ['Bash(rm -rf /)'] });
   const keys = Object.keys(permission.bash);
   assert.equal(keys[0], '*', 'in OpenCode the last matching rule wins, so "*" comes first');
-  assert.ok(keys.indexOf('rm -rf /*') > 0);
+  assert.ok(keys.indexOf('rm -rf /') > 0);
 });
 
 test('toOpenCodePermissions: non-bash tools are allowed explicitly', () => {
@@ -134,11 +135,11 @@ test('toOpenCodePermissions: non-bash tools are allowed explicitly', () => {
 
 // The arbiter plugin: the rules come from THE SAME core/safety.mjs as the Claude Code hook.
 test('buildOpenCodePluginScript: carries the OpenCode contract and our rule source', () => {
-  const s = buildOpenCodePluginScript('/abs/path/core/safety.mjs');
+  const s = buildOpenCodePluginScript('/abs/path/core/permission-decision.mjs');
   assert.match(s, /export const \w+/, 'a named export');
   assert.match(s, /tool\.execute\.before/, 'the tool-call interception hook');
   assert.match(s, /output\.args\.command/, 'the command is read from args.command');
-  assert.match(s, /destructiveReason/, 'the rules come from the shared detector');
+  assert.match(s, /decidePermission/, 'the mode comes from the shared decision');
   assert.match(s, /throw new Error/, 'blocking by throwing an error');
-  assert.match(s, /safety\.mjs/, 'a reference to the single rule source');
+  assert.match(s, /permission-decision\.mjs/, 'a reference to the single decision source');
 });

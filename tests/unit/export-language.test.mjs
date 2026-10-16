@@ -78,3 +78,49 @@ test('a file that is neither plainly text nor a known binary is reported, never 
   assert.match(String(hit.first.text), /binary|not readable as text/i,
     'and the reason must say the file could not be read, not pretend it was checked');
 });
+
+// ALLOWED LITERALS (v1.21.0). Ten translated READMEs each carry a language table naming languages by
+// their endonym — the name a language uses for itself, because a reader scans that list for their own
+// word, not for an English one. One endonym is written in the forbidden alphabet, and the gate
+// correctly stopped the export on all eleven files at once.
+//
+// The fix had to be narrow. Excusing README.md by path would have dropped the check on the most
+// important file in the tree, so the next untranslated paragraph landing there would ship in silence.
+// Loosening the pattern would have been worse still: this gate exists precisely because a rule
+// written against the FORM of a thing lets dangerous CONTENT through.
+//
+// So the exception is a list of literals, and these tests pin the property that makes it safe: the
+// word is excused, the language is not.
+const ENDONYM = String.fromCharCode(0x0420, 0x0443, 0x0441, 0x0441, 0x043a, 0x0438, 0x0439);
+const withLiterals = { ...cfg, allowed_literals: [ENDONYM] };
+
+test('an allowed literal does not trip the gate', { skip }, async () => {
+  const { scanLanguage } = await import(TOOL_URL);
+  const line = `**Read this in your language:** [${ENDONYM}](README.ru.md)\n`;
+  assert.equal(scanLanguage(line, withLiterals, 'README.md'), null);
+});
+
+test('the same literal still trips the gate when the list is empty', { skip }, async () => {
+  // Otherwise this test would pass for the wrong reason and prove nothing about the allowance.
+  const { scanLanguage } = await import(TOOL_URL);
+  assert.ok(scanLanguage(`[${ENDONYM}](README.ru.md)\n`, cfg, 'README.md'));
+});
+
+test('a sentence around an allowed literal is still caught', { skip }, async () => {
+  // The whole point: the word is excused, not the language. Everything else in the sentence remains
+  // forbidden, so a real untranslated paragraph cannot hide behind one permitted word.
+  const { scanLanguage } = await import(TOOL_URL);
+  const sentence = `${FORBIDDEN} ${ENDONYM} ${FORBIDDEN}\n`;
+  const hit = scanLanguage(sentence, withLiterals, 'README.md');
+  assert.ok(hit, 'an allowed word must not launder the text around it');
+});
+
+test('allowed literals do not shift the reported line number', { skip }, async () => {
+  // The literal is blanked with a same-length filler rather than removed, so the line numbers the
+  // report prints still point at the real place in the file.
+  const { scanLanguage } = await import(TOOL_URL);
+  const text = `line one\n[${ENDONYM}](README.ru.md)\nline three\n${FORBIDDEN}\n`;
+  const hit = scanLanguage(text, withLiterals, 'README.md');
+  assert.ok(hit);
+  assert.equal(hit.first.line, 4);
+});

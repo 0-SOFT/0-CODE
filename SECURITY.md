@@ -1,52 +1,13 @@
-# Security policy
+# Security and ownership
 
-## Reporting a vulnerability
+Report a reproducible issue privately to the owner of [0-SOFT/0-CODE](https://github.com/0-SOFT/0-CODE), using a private reporting channel offered by the repository or a maintainer. Include the affected version, platform, command and consequence; redact credentials and personal data. Do not post an exploit containing secrets in a public issue. Install from that public repository or a reviewed local source; installation and publication are separate operations.
 
-Please report security issues **privately** — open a
-[security advisory](https://github.com/0-SOFT/0-CODE/security/advisories/new) rather than a public
-issue.
+The installer writes only its `.0-code/` namespace, required native engine entries and missing cycle documents. Preview every lifecycle operation with `--dry-run`. Receipts record owned hashes and exact inserted blocks/fields. Changed owned content or incompatible owner hooks cause a refusal before writes. Upgrade preserves project configuration and documents; uninstall preserves documents and unrelated owner entries. Runtime backups are ignored and private to the installation.
 
-Include what you can: what you observed, how to reproduce it, and what an attacker could do with
-it. A proof of concept helps but is not required.
+Choose toolset scope explicitly before installation. User scope can write native user tool/MCP settings for Claude Code, Codex and OpenCode; project scope keeps native delivery in the project. The user toolset is independently owned and removed only by `uninstall-tools`; shared global npm packages are not removed. Installation and recovery use bounded paths and journals. The public catalog has five default MCP (context7, playwright, chrome-devtools, sequential-thinking and memory), and excludes private skill, agent, command and rule bodies. Valid newer npm packages are preserved; package name and entry point are checked separately. These five need no external API key, and browser tools need an available browser. Local registration does not prove a live connection.
 
-## What is in scope
+The public source excludes `config/legacy-installations.json`. Automatic migration of root-based 1.x needs a separate source containing published ownership evidence. With that evidence, migration removes legacy files only when their bytes match; ambiguous blocks and live old cycles refuse conversion. Without evidence, preserve old files and review ownership before changes. Keep backups until the migration has been verified.
 
-This framework runs an AI agent with broad permissions on your machine, so the interesting
-questions are about the boundaries:
+Authentication files are never copied. MCP source descriptors contain environment references; credentials resolve at launch. Selected optional providers need explicit configuration and their normal account authorization. Model and effort default to the owner's native preferences; flags, environment and project configuration override them in that order. Session transcripts may contain all data an agent read. Supervisor attempt journals for all three engines redact known secret values, but redaction is not a guarantee that arbitrary private content is absent. Exclude logs from git and keep them under the configured logs role; disable `session_logs` and dependent `token_usage` when logs are unwanted.
 
-- **Bypassing the guard.** The four irreversible-command rules are enforced by a hook (Claude Code)
-  and a plugin (OpenCode). If you find a command shape that slips past the detector, that is a
-  valid report. See `core/safety.mjs`.
-- **Removing the guard.** The main plugin deliberately lives outside the working directory because
-  an agent inside the project was able to delete it. If you find another way to disarm it from
-  inside a turn, we want to know.
-- **Leaking secrets.** API keys travel through environment variables and must never reach a command
-  line, a log, or an error message. A path where one does is a valid report.
-- **The export tool.** `tools/export-public.mjs` refuses to publish when it finds a secret pattern.
-  A way to smuggle one past it is a valid report.
-
-## What is not a vulnerability
-
-Some behaviour looks alarming but is deliberate, documented, and chosen with the trade-off in mind:
-
-- **The agent can delete uncommitted work.** `git reset --hard` and `git clean` are not blocked —
-  they are routine, and blocking them cost more than it saved (a measurement showed 7 false
-  refusals out of 11 everyday commands). Commit often.
-- **Secrets can be committed.** There is deliberately no ban. The framework writes a line in the
-  log and notifies you; the decision stays with the project owner.
-- **The agent can write bad code.** Nothing here judges correctness. That is what tests and review
-  are for.
-- **Within one turn the project-level permission file can be edited.** This is stated openly in the
-  documentation. It does not remove protection, because the blocking is done by a plugin outside the
-  agent's reach.
-
-If you are unsure whether something belongs in the first list or the second, report it — a wrong
-guess in that direction costs nothing.
-
-## Handling your own secrets
-
-- Keys belong in `.env`, which is gitignored. Never in a manifest, never in a command line.
-- If a key has been committed and pushed, treat it as exposed from that moment: rotate it, then
-  clean the history.
-- `config/mcp-manifest.example.json` shows the format: `${VAR}` placeholders only, values supplied
-  at provisioning time.
+Guard modes and native permission precedence are documented in [ENGINE_SETTINGS](docs/ENGINE_SETTINGS.md); the single configuration reference is [PROJECT_SETTINGS](docs/PROJECT_SETTINGS.md). The shared detector governs destructive filesystem commands, disk formatting, mass process termination and force push. `allow-all` explicitly disables its denials. Secret scanning of ordinary agent work is not an enforcement feature. The development-only exporter checks final content, language and links before preparing the public tree; it and its private rules are excluded from the public source. Doctor invokes no model and does not test external account authorization.

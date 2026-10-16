@@ -22,10 +22,10 @@
           "env": { "type": "object", "additionalProperties": { "type": "string" } },
           "url": { "type": "string" },
           "headers": { "type": "object", "additionalProperties": { "type": "string" } },
-          "secrets": { "type": "array", "items": { "type": "string" } },
+          "secrets": { "type": "array", "items": { "type": "string" }, "description": "Required credential variable names. Their values must not appear in command, args or URL." },
           "portable": { "type": "boolean" },
           "needs_setup": { "type": "boolean" },
-          "source": { "type": "string", "enum": ["local", "claude_ai"] },
+          "source": { "type": "string", "minLength": 1, "description": "Package or local provenance; claude_ai marks an account connector rather than a local server." },
           "linux_setup": { "type": "string" },
           "note": { "type": "string" }
         }

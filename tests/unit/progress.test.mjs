@@ -1,3 +1,4 @@
+import { cleanupTempDirSync } from '../helpers/index.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
@@ -16,7 +17,7 @@ function mkGitDir() {
   writeFileSync(join(dir, 'a.txt'), 'v1\n');
   git('add', 'a.txt');
   git('commit', '-q', '-m', 'init');
-  return { dir, git, cleanup: () => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } } };
+  return { dir, git, cleanup: () => { try { cleanupTempDirSync(dir); } catch { /* best effort */ } } };
 }
 
 test('captureSnapshot/assessProgress: no changes → no progress', () => {
@@ -79,7 +80,7 @@ test('captureSnapshot: a directory without git → null fields, no crash', () =>
     assert.equal(s.stateHash, null);
     const r = assessProgress(s, captureSnapshot({ cwd: dir }));
     assert.equal(r.progressed, false);
-  } finally { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
+  } finally { try { cleanupTempDirSync(dir); } catch { /* best effort */ } }
 });
 
 test('escalationDirective: carries the original prompt and the demand to execute', () => {

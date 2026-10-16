@@ -10,6 +10,20 @@ test('gate: blockers → stop', () => {
   assert.ok(d.notify);
 });
 
+// v1.25.0, found by the final audit: writing a blocker is THE documented way to stop the loop, and a
+// blocker written as a string (`blockers: "it is broken"`) was read as "no blockers" — the gate kept
+// only arrays. A broken header (`blockers: [` never closed) reaches the gate as the string "[", so a
+// damaged STATE kept the loop running blind instead of stopping it.
+test('gate: a blocker in any non-empty shape stops the loop; empty shapes do not', () => {
+  const base = { current_version: '1.0.0', released_version: null, iteration: 1, next_step_prompt: 'go' };
+  for (const blockers of ['it is broken', '[', { type: 'manual_request' }, ['x']]) {
+    assert.equal(decideContinuation({ ...base, blockers }).action, 'stop', JSON.stringify(blockers));
+  }
+  for (const blockers of [[], null, undefined, '', '   ', [null, '']]) {
+    assert.equal(decideContinuation({ ...base, blockers }).action, 'continue', JSON.stringify(blockers));
+  }
+});
+
 test('gate: released == current → stop', () => {
   const d = decideContinuation({ current_version: '1.0', released_version: '1.0' }, { sessionId: 's' });
   assert.equal(d.action, 'stop');
@@ -35,6 +49,14 @@ test('cap_usd = 0 (disabled) → no stop', () => {
   assert.equal(d.action, 'continue');
 });
 
+test('a negative spending cap is disabled for every loop driver', () => {
+  for (const driver of ['supervisor', 'stop-hook']) {
+    const r = decideContinuation({ current_version: '1', budget_metrics: {
+      version_cost_usd: 999, cap_usd: -1 } }, { sessionId: 's', driver });
+    assert.equal(r.action, 'continue');
+  }
+});
+
 test('continue: iteration increment, adoption, the step instruction is carried through', () => {
   const st = { current_version: '1', iteration: 5, max_iterations: 60,
     last_session_id: 'old', session_count: 3, next_step_prompt: 'do X' };
@@ -57,6 +79,27 @@ test('continue: the same session → session_count does not grow, adopted=false'
   assert.equal(d.next.sessionCount, 2);
   assert.equal(d.adopted, false);
   assert.ok(d.reason.length > 0);           // the default reason when next_step_prompt is empty
+});
+
+// v1.28.0: live Codex acceptance skipped task 0 because the supervisor's header said iteration 1
+// while STATE still held 0. The Stop hook writes next.iteration before sending its continuation;
+// the supervisor writes it only after the working turn. Both messages must describe the STATE
+// the agent can read when it receives them, without changing either driver's counting contract.
+test('iteration labels follow when the driver writes STATE, while the next counter stays shared', () => {
+  for (const iteration of [0, 4]) {
+    for (const max_iterations of [5, null]) {
+      const state = { current_version: '1', iteration, max_iterations, blockers: [] };
+      for (const driver of ['supervisor', 'stop-hook']) {
+        const d = decideContinuation(state, { sessionId: 's', driver });
+        const visible = driver === 'supervisor' ? iteration : iteration + 1;
+        const label = max_iterations === null ? `${visible} (no cap)` : `${visible}/${max_iterations}`;
+        assert.ok(d.reason.includes(`iteration: ${label} |`), `${driver}: ${d.reason}`);
+        assert.ok(d.systemMessage.includes(`iter ${label} (v1)`), `${driver}: ${d.systemMessage}`);
+        assert.equal(d.next.iteration, iteration + 1);
+        assert.equal(state.iteration, iteration, 'the pure gate does not write STATE');
+      }
+    }
+  }
 });
 
 // The loop stop contract, pinned down after a real misunderstanding: the instructions promised
@@ -102,7 +145,7 @@ test('budget gate: within the cap the loop continues', () => {
 
 // --- v1.7.0: the step instruction must not be able to go stale ---------------------------------
 //
-// Reported from a live project (COINFLIPPER-REVERSE, running framework 1.6.1). The loop refused
+// Reported from a live project running framework 1.6.1. The loop refused
 // to finish: on EVERY Stop hook, for two whole chains of work, the agent was handed the same
 // instruction written back in the 4.6.0 era — one that announced a blocker — while STATE had long
 // since moved on to 6.4.0 with `blockers: []`. The text contradicted the machine state and still

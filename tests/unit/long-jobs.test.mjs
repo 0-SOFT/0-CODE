@@ -1,6 +1,7 @@
 import { test } from 'node:test';
+import { cleanupTempDir } from '../helpers/index.mjs';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classifyJob, inspectJobs, summariseJobs, inspectStateJobs, terminalAdvice } from '../../core/long-jobs.mjs';
@@ -105,7 +106,7 @@ test('summariseJobs says so plainly when nothing is running', () => {
 
 // The gathering half touches the filesystem, so it is exercised against real files: a log that
 // contains the marker, one that does not, and one that is not there at all.
-test('inspectStateJobs reads real logs and never throws on a missing one', () => {
+test('inspectStateJobs reads real logs and never throws on a missing one', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'jobs-'));
   try {
     writeFileSync(join(dir, 'done.log'), 'work happened\nSUITE FINISHED\n');
@@ -120,7 +121,7 @@ test('inspectStateJobs reads real logs and never throws on a missing one', () =>
     assert.equal(by.finished, 'finished');
     assert.equal(by.died, 'died');
     assert.equal(by['no-log'], 'died', 'an unreadable log means the marker was not seen, never a crash');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { await cleanupTempDir(dir); }
 });
 
 test('inspectStateJobs on a state without jobs is empty and cheap', () => {
@@ -216,7 +217,7 @@ test('nothing is said when every job is still running', () => {
   assert.equal(terminalAdvice([{ id: 'suite', state: 'running' }]), null);
 });
 
-test('inspectStateJobs tells a job that never started from one that simply ended', () => {
+test('inspectStateJobs tells a job that never started from one that simply ended', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'jobs-'));
   try {
     writeFileSync(join(dir, 'ran.log'), 'work happened\n');
@@ -228,5 +229,5 @@ test('inspectStateJobs tells a job that never started from one that simply ended
       inspectStateJobs(state, { cwd: dir, now: '2026-09-01T10:00:00Z' }).map(j => [j.id, j.state]));
     assert.equal(by.ran, 'finished');
     assert.equal(by['never-started'], 'died');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { await cleanupTempDir(dir); }
 });

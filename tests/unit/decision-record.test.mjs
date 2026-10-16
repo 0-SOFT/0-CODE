@@ -1,3 +1,4 @@
+import { cleanupTempDirSync } from '../helpers/index.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
@@ -183,7 +184,7 @@ test('parseDecision reads the frontmatter of a decision file', () => {
     assert.equal(rec.chosen, 'transcript');
     assert.equal(rec.options.length, 3);
     assert.equal(validateDecision(rec).ok, true, 'a file written the documented way must validate');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { cleanupTempDirSync(dir); }
 });
 
 test('a file that is not a decision record is reported rather than crashing the loop', () => {
@@ -193,7 +194,7 @@ test('a file that is not a decision record is reported rather than crashing the 
     writeFileSync(file, '# just some notes\n', 'utf8');
     assert.equal(parseDecision(file), null);
     assert.equal(parseDecision(join(dir, 'absent.md')), null);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { cleanupTempDirSync(dir); }
 });
 
 // This is what makes the absence of a record visible: the driver asks, every turn, whether the
@@ -212,5 +213,5 @@ test('findDecisionFor answers whether the version in flight has a record', () =>
     assert.match(found.file, /1\.16\.0_thresholds/);
 
     assert.equal(findDecisionFor(dir, '1.17.0'), null, 'and another version is not this one');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { cleanupTempDirSync(dir); }
 });

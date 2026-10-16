@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { routeModel, presetFromEnv, OPENROUTER_PRESET, presetForBackend, KIMI_PRESET } from '../../core/model-routing.mjs';
+import { routeModel, presetFromEnv, OPENROUTER_PRESET, presetForBackend, KIMI_PRESET, CODEX_PRESET, codexTurnPreset } from '../../core/model-routing.mjs';
 
 test('routeModel: tiers by step type', () => {
   assert.equal(routeModel('research'), OPENROUTER_PRESET.high);
@@ -39,12 +39,12 @@ test('presetFromEnv: an empty env → the full default', () => {
 });
 
 // v1.3.0: the Kimi preset — the expensive model only for thinking, routine work on the cheap one.
-test('presetForBackend: opencode gets the Kimi models, the rest keep the originals', () => {
-  const kimi = presetForBackend('opencode', {});
-  assert.match(kimi.high, /kimi-k2/, 'the default is the cheap model proven by measurement, not k3');
-  assert.match(kimi.mid, /kimi-k2\.7-code/);
-  assert.match(kimi.smoke, /:free$/, 'smoke checks must be free of charge');
-  assert.notEqual(presetForBackend('claude', {}).high, kimi.high);
+test('presetForBackend: an unset route preserves each engine own model configuration', () => {
+  for (const id of ['codex', 'claude', 'opencode']) {
+    const preset = presetForBackend(id, {});
+    for (const step of ['research', 'implement', 'smoke']) assert.equal(routeModel(step, preset), undefined);
+  }
+  assert.match(KIMI_PRESET.mid, /kimi-k2\.7-code/); // Named presets remain available for explicit selection.
 });
 
 test('presetForBackend: environment overrides are preserved', () => {
@@ -57,4 +57,18 @@ test('routeModel with the Kimi preset: thinking costs more than routine work', (
   assert.equal(routeModel('research', p), p.high);
   assert.equal(routeModel('implement', p), p.mid);
   assert.equal(routeModel('smoke', p), p.smoke);
+});
+
+test('Codex routes and named presets never insert an effort or a default model', () => {
+  const preset = presetForBackend('codex', {});
+  for (const step of ['implement', 'execute', 'test', 'docs', 'research', 'audit', 'unknown', undefined]) {
+    assert.equal(routeModel(step, preset), undefined, String(step));
+  }
+  for (const step of ['format', 'lookup', 'routine', 'smoke']) {
+    assert.equal(routeModel(step, preset), undefined, step);
+  }
+  assert.equal(CODEX_PRESET.mid, 'gpt-6.1-sol');
+  assert.deepEqual(codexTurnPreset(), {});
+  assert.deepEqual(codexTurnPreset('gpt-6-luna'), { model: 'gpt-6-luna' });
+  assert.deepEqual(codexTurnPreset('owner-model'), { model: 'owner-model' });
 });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyFailure, decideRetry, backoffMs, maxRetries } from '../../core/turn-retry.mjs';
+import { classifyFailure, decideRetry, backoffMs, maxRetries, networkOutage, NETWORK_NOTICE_AFTER_MS } from '../../core/turn-retry.mjs';
 
 // The split came out of a real case: the v1.3.0 acceptance run died on a single
 // "UnknownError: Unexpected server error", although a retry would have gone through.
@@ -17,6 +17,8 @@ test('transient failures: a retry has a chance', () => {
     'turn aborted by timeout (900000 ms): opencode did not answer',
     'fetch failed',
     'getaddrinfo EAI_AGAIN openrouter.ai',
+    'getaddrinfo ENOTFOUND provider.invalid',
+    'HTTP 403 Forbidden: <!doctype html><html><title>Proxy temporarily blocked</title></html>',
   ];
   for (const e of samples) {
     assert.equal(classifyFailure(e), 'transient', `must be transient: ${e}`);
@@ -26,6 +28,8 @@ test('transient failures: a retry has a chance', () => {
 test('real errors: retrying is pointless', () => {
   const samples = [
     'HTTP 401 Unauthorized',
+    'HTTP 403 {"error":"model access denied"}',
+    'HTTP 401 <!doctype html><html>Unauthorized</html>',
     'Invalid API key provided',
     'no such model: moonshotai/kimi-k9',
     'insufficient credits — 402 Payment Required',
@@ -41,6 +45,16 @@ test('real errors: retrying is pointless', () => {
 // Check order matters: a single string may carry both markers at once.
 test('a mixed case: a real error outranks a transient one', () => {
   assert.equal(classifyFailure('401 Unauthorized (rate limit info attached)'), 'fatal');
+});
+test('Windows DNS errors keep retrying while authorization, model and subscription errors outrank them',()=>{
+  for(const error of ['No such host is known (os error 11001)','No such host is known (os error 11004)','os error 11001','os error 11004']) {
+    assert.equal(classifyFailure(error),'transient');
+    assert.equal(decideRetry({error,attempt:3}).retry,true);
+    assert.equal(classifyFailure('401 authentication failed; '+error),'fatal');
+    assert.equal(classifyFailure('unknown model; '+error),'fatal');
+    assert.equal(classifyFailure('usage_limited; '+error),'usage_limited');
+  }
+  assert.equal(classifyFailure('os error 110010'),'unknown');
 });
 
 test('an unrecognised failure: we retry, but fewer times', () => {
@@ -65,15 +79,36 @@ test('the pause doubles and then hits the ceiling', () => {
 
 test('retry decision: a transient failure is retried up to the limit, then gives up', () => {
   const e = 'HTTP 503 Service Unavailable';
-  const first = decideRetry({ error: e, attempt: 1 });
+  const first = decideRetry({ error: e, attempt: 1, limits: { transient: 4 } });
   assert.equal(first.retry, true);
   assert.equal(first.kind, 'transient');
   assert.ok(first.delayMs > 0);
   assert.match(first.reason, /attempt 1 of 4/);
 
-  const last = decideRetry({ error: e, attempt: 5 });
+  const last = decideRetry({ error: e, attempt: 5, limits: { transient: 4 } });
   assert.equal(last.retry, false, 'once retries are exhausted the loop must stop');
   assert.match(last.reason, /did not clear within 4 retries/);
+});
+
+test('temporary failures have no default retry limit and pauses never exceed five minutes', () => {
+  assert.equal(maxRetries('transient'), Infinity);
+  const result = decideRetry({ error: 'ENOTFOUND provider.invalid', attempt: 1000000 });
+  assert.equal(result.retry, true); assert.equal(result.delayMs, 300000);
+  assert.match(result.reason, /without a retry limit/);
+  assert.equal(backoffMs(100, { jitter: 0.5 }), 300000);
+  assert.equal(decideRetry({ error: 'HTTP 503', limits: { transient: 0 } }).retry, false);
+  assert.equal(decideRetry({ error: 'HTTP 401', limits: { fatal: 999 } }).retry, false);
+});
+
+test('the network alert fires once at ten minutes, with a fresh episode after recovery', () => {
+  assert.equal(NETWORK_NOTICE_AFTER_MS, 600000);
+  const start = networkOutage(undefined, { now: 1000 });
+  assert.equal(start.notify, false);
+  assert.equal(networkOutage(start, { now: 600999 }).notify, false);
+  const due = networkOutage(start, { now: 601000 }); assert.equal(due.notify, true);
+  assert.equal(networkOutage(due, { now: 1201000 }).notify, false);
+  assert.equal(networkOutage(undefined, { now: 1201000 }).notify, false);
+  assert.equal(networkOutage(start, { now: 1201000, kind: 'unknown' }).notify, false);
 });
 
 test('retry decision: a real error is never retried', () => {

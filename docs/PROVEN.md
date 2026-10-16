@@ -238,8 +238,10 @@ is there to fix.
   deliberately allowed — they are routine, and blocking them costs more than it saves. In `confirm`
   mode they ask for a stated reason instead, which is affordable there because a request to think
   costs a rewritten command rather than a lost turn. Commit often either way.
-- **The spending cap only works under the supervisor.** It compares against a counter that the
-  supervisor fills from what the engine reports; the Claude Code Stop hook never sees a cost. Under
+- **The spending cap works only under the supervisor with engines reporting USD.** Codex reports
+  tokens without USD and refuses a positive `budget_metrics.cap_usd` before work starts; use
+  `max_iterations` to bound its turns. For engines reporting USD, the cap compares against a
+  counter filled from their reported cost; the Claude Code Stop hook never sees a cost. Under
   the hook the counter stays at zero and the cap cannot fire — the loop now says so in every
   continuation instead of looking like a guard. Measured: three iterations through the real hook
   moved the iteration count 0 → 3 and left the spend at 0.
@@ -250,8 +252,9 @@ is there to fix.
   shell.
 - **Code quality is not judged.** Nothing here evaluates whether what the agent wrote is correct.
   That is what tests and review are for.
-- **The spending guard is accurate to a step boundary**, not to the cent: a $0.002 cap aborted at
-  $0.03. It prevents runaway spending; it does not guarantee an exact figure.
+- **The spending guard for engines reporting USD is accurate to a step boundary**, not to the cent:
+  the recorded $0.002 cap aborted at $0.03. It prevents runaway spending; it does not guarantee an
+  exact figure. This historical dollar measurement does not apply to Codex.
 - **Orphaned processes live until the next launch** in the hard-kill case. Immediate cleanup from
   inside a dying process is physically impossible.
 - **Endurance is proven to 2.5 hours**, not to a day.

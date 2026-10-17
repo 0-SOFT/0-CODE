@@ -1,6 +1,6 @@
 # 0-CODE
 
-**Version:** v2.0.3
+**Version:** v2.0.4
 
 An autonomous development cycle for **Claude Code, Codex and OpenCode**, integrated into an existing project. One cycle prompt can contain research, implementation, repairs, audits and release work.
 

@@ -14,10 +14,19 @@ function pathExists(path) {
 
 export function isTransientCloneLock(result,target,platform=process.platform) {
   if(platform!=='win32'||result.status!==128||result.error||result.signal)return false;
-  const config=join(resolve(target),'.git','config').replaceAll('\\','/');
-  const lines=String(result.stderr||'').replaceAll('\\','/').split(/\r?\n/);
-  return lines.includes(`error: could not lock config file ${config}: File exists`)
-    &&lines.includes("fatal: could not set 'core.repositoryformatversion' to '0'");
+  const destination=resolve(target),git=join(destination,'.git');
+  return hasPathType(destination,'directory')&&hasPathType(git,'directory')
+    &&hasPathType(join(git,'config.lock'),'file');
+}
+
+function hasPathType(path,type) {
+  try {
+    const stat=lstatSync(path);
+    return type==='directory'?stat.isDirectory():stat.isFile();
+  } catch(error) {
+    if(error.code==='ENOENT'||error.code==='ENOTDIR')return false;
+    throw error;
+  }
 }
 
 // Never remove a surviving destination or lock; a retry can use a fresh sibling fixture.

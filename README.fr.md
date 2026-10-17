@@ -2,7 +2,7 @@
 
 # 0-CODE
 
-**Version:** v2.0.3
+**Version:** v2.0.4
 
 Un cycle de développement autonome pour **Claude Code, Codex et OpenCode**, intégré à un projet existant. Une seule consigne de cycle peut réunir recherche, réalisation, corrections, audits et livraison.
 

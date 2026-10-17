@@ -1,6 +1,6 @@
 # Development guide
 
-**Framework version:** v2.0.3
+**Framework version:** v2.0.4
 
 0-CODE runs a cycle described by one prompt in an existing project through Claude Code, Codex or OpenCode. Obtain the source from `https://github.com/0-SOFT/0-CODE`. Use [INTEGRATE](INTEGRATE.md) for lifecycle operations and [PROJECT_SETTINGS](docs/PROJECT_SETTINGS.md) for the single configuration contract. In an installed project, framework code lives in `.0-code/`; a source checkout keeps `core/`, `lib/`, `hooks/` and `tools/` at its own root.
 

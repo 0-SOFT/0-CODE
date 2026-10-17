@@ -9,14 +9,22 @@ All notable changes to this project are documented here. The format follows
 > below records what changed and — more usefully — **what was learned**. Where a decision was later
 > reversed, the reversal is listed too: this project treats a disproven assumption as a result.
 
-**Current version: v2.0.3.** Validation for this version is recorded with each change; earlier runs below are historical evidence.
+**Current version: v2.0.4.** Validation for this version is recorded with each change; earlier runs below are historical evidence.
 
-This public update includes changes from **1.21.0 through 2.0.3** after the published
+This public update includes changes from **1.21.0 through 2.0.4** after the published
 1.20.0. Version 1.21.0 was prepared locally but was not published. Older sections
 record behavior and measurements at the time; current installation instructions
 are in [INTEGRATE](INTEGRATE.md) and [PROJECT_SETTINGS](docs/PROJECT_SETTINGS.md).
 Private development reports, decisions and task documents are excluded; configured
 document roles in installed projects remain part of the product.
+
+---
+
+## [v2.0.4] - 2026-10-17 - Git lock evidence independent of diagnostic text
+
+- Windows clone fixtures retry only exit status 128 without a launch error or signal, with a regular `config.lock` inside the actual regular destination and `.git` directories. Missing paths, wrong types and symbolic links do not permit retry; unexpected filesystem errors propagate. Diagnostic wording, locale and path formatting no longer control classification.
+- Native Git regressions distinguish `init`, which retains a template lock, from `clone`, which removes it during cleanup. A controlled init refusal can lead to a real clone in a fresh sibling; a clone refusal without surviving evidence returns immediately. All remaining lock and owner bytes are preserved, occupied destinations are protected, and attempts remain bounded at three.
+- Version headers are aligned with 2.0.4. Targeted regression evidence is separate from full release acceptance and publication.
 
 ---
 

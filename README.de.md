@@ -1,8 +1,8 @@
-<!-- tracks: README.md sha256:3861ef6052d0 -->
+<!-- tracks: README.md sha256:6be15af01675 -->
 
 # 0-CODE
 
-**Version:** v2.0.4
+**Version:** v2.1.0
 
 Ein autonomer Entwicklungszyklus für **Claude Code, Codex und OpenCode**, eingebunden in ein bestehendes Projekt. Eine einzige Zyklusanweisung kann Recherche, Umsetzung, Fehlerbehebung, Audits und Veröffentlichung umfassen.
 
@@ -25,6 +25,18 @@ Modell, Denkaufwand und Anmeldung gehören dem Eigentümer. Die Priorität laute
 Der [öffentliche Katalog](toolset/CATALOG.md) enthält **fünf Standard-MCP: context7, playwright, chrome-devtools, sequential-thinking und memory**. Benötigt werden npm-Pakete ab der getesteten SemVer-Mindestversion mit korrektem Namen und Einstiegspunkt; gültige neuere Versionen bleiben erhalten. Externe API-Schlüssel sind nicht nötig; Browserwerkzeuge benötigen zusätzlich einen verfügbaren Browser. Registrierung und erfolgreicher doctor beweisen keine aktive Verbindung. Private Implementierungsdateien für Skills, Agenten, Kommandos und Regeln sind ausgeschlossen. Optionale Beispiele für Kontodienste im MCP-Manifest bleiben bis zur ausdrücklichen Konfiguration und Autorisierung aus.
 
 Standard ist **eine unabhängige Installation pro Benutzer**, gemeinsam für seine Projekte. Dieselbe Auswahl erneut zu installieren ändert nichts. Der Bereich project bindet eine andere Auswahl an ein Projekt. Projektentfernung behält Maschinenwerkzeuge; `uninstall-tools` entfernt sie getrennt und stellt ihre ursprünglichen Einstellungen wieder her. Authentifizierung wird nie kopiert. [Konfiguration und Voraussetzungen](docs/PROJECT_SETTINGS.md).
+
+## Dokumente, Migration und Eigentum in 2.1.0
+
+Neue Installationen legen alle neun Dokumentrollen unter `.0-code/docs/` ab: `STATE.md`, `ROADMAP.md`, `reports/`, `decisions/`, `todo/`, `logs/`, `prompts/`, `prompts/templates/` und `userdocs/`. Dauerhafte Dokumente gehören in Git; Sitzungsprotokolle werden ignoriert. Protokolle dürfen auch `.0-code/run/logs/` nutzen, dauerhafte Rollen keinen Laufzeitpfad. Explizite externe Rollen bleiben unterstützt; normales upgrade behält bestehende Pfade. Dokumente stehen außerhalb des Eigentumsbelegs: doctor akzeptiert sie, upgrade erhält sie, uninstall behält sie samt Verzeichnissen und entfernt Laufzeitdaten und Sicherungen.
+
+Standardrollen aus `docs/*` in 2.0.x werden ausdrücklich mit `upgrade --relocate-documents <files.json>` oder `migrate --relocate-documents <files.json>` verschoben, zuerst mit `--dry-run`. Prüfen Sie die genaue Dateiliste; nicht aufgeführte Produktdokumentation bleibt. Konfiguration, STATE-Verweise und ausgewählte Vorlagen werden angepasst, geänderte Originalbytes archiviert. Individuelle externe Pfade bleiben. Vor Verschiebung oder Übernahme den Zyklus abschließen, Hintergrundarbeiten einsammeln und den Treiber stoppen; aktive Sperren oder geänderte Eingaben führen zur Ablehnung. Änderungen gemeinsam in Git vormerken, damit Umbenennungen erkennbar bleiben.
+
+Eine angepasste `.0-code/`-Installation ohne Beleg wird über `migrate --adopt-manifest <manifest.json>` mit geprüften SHA-256-Werten und `replace`/`preserve` übernommen. Nur genau aufgeführte Projekterweiterungen in `bin/`, `claude/` und `.0-code/README.md` können erhalten bleiben; Frameworkcode wird ersetzt und archiviert. Erweiterungen bleiben bearbeitbar und überstehen upgrade/uninstall. Unbekannte Dateien oder abweichende Hashes führen zur Ablehnung; Übernahme und Verschiebung sind getrennte Vorgänge. Eigene AGENT-Regeln vorher als Dokument sichern und über `instructions.project_rules` referenzieren.
+
+Claude kann mit `instructions.claude: session-hook` ohne Änderung von `CLAUDE.md` arbeiten. Für Sitzungseinstellungen `instructions.claude_settings: .0-code/claude/settings.json` wählen und Launcher, MCP sowie system-prompt behalten. Mit `claude --settings .0-code/claude/settings.json` starten; normale Sitzungen laden diese Datei nicht automatisch. Kompatible Einstellungen behalten ihre Richtlinien; fremde Stop/guard-Hooks erfordern Prüfung. Uninstall stellt Originaleinstellungen wieder her. Doctor prüft lokale Hooks, keine Benutzer-/Managed-/CLI-Overrides. [Formate, Befehle und Grenzen](docs/PROJECT_SETTINGS.md).
+
+Die Entwicklungsabnahme für 2.1.0 erfolgte unter Windows mit Node 24. Linux, macOS und Node 20/22 waren nicht abgedeckt; eine konfigurierte CI-Matrix belegt keine Ausführung. [Prüfumfang](docs/PROJECT_SETTINGS.md#validation-scope) beschreibt die Grenzen bei Dateisystem und Abdeckung.
 
 ## Arbeiten und pflegen
 

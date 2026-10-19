@@ -24,6 +24,9 @@ ralph-loop-stop text eol=lf
 *.ps1       text eol=crlf
 *.bat       text eol=crlf
 
+# This polyglot is also executed by Bash on Unix; cmd.exe accepts LF.
+hooks/run-hook.cmd text eol=lf
+
 # Binary files — no normalisation
 *.png       binary
 *.jpg       binary

@@ -33,7 +33,7 @@ test('project ignore and attribute files remain byte-identical; runtime has its 
   writeFileSync(join(root, '.gitignore'), ignore); writeFileSync(join(root, '.gitattributes'), attributes);
   const result = await install(root); assert.equal(result.status, 0, result.stderr);
   assert.equal(readFileSync(join(root, '.gitignore'), 'utf8'), ignore); assert.equal(readFileSync(join(root, '.gitattributes'), 'utf8'), attributes);
-  assert.equal(readFileSync(join(root, '.0-code/.gitignore'), 'utf8'), 'run/\n');
+  assert.equal(readFileSync(join(root, '.0-code/.gitignore'), 'utf8'), '/run/\n/docs/logs/\n');
 });
 test('ordinary source folders are preserved and a foreign Stop fails before writing anything', async t => {
   const root = fixture(t); mkdirSync(join(root, 'lib')); writeFileSync(join(root, 'lib/yaml-mini.mjs'), 'project module');

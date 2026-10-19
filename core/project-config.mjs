@@ -8,7 +8,24 @@ import { resolveEngineSettings } from './engine-settings.mjs';
 const SOURCE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SCHEMA = JSON.parse(readFileSync(join(SOURCE_ROOT, 'schemas', 'config.schema.json'), 'utf8'));
 export const CONFIG_PATH = '.0-code/config.json';
-export const DOCUMENT_DEFAULTS = Object.freeze({
+export const DOCUMENT_ZONE = '.0-code/docs';
+export const isClaudeInstructionPath = path => path.replaceAll('\\', '/').toLowerCase() === 'claude.md';
+export function isDocumentZone(path) {
+  const normalized = path.replaceAll('\\', '/').toLowerCase();
+  return normalized === DOCUMENT_ZONE || normalized.startsWith(DOCUMENT_ZONE + '/');
+}
+export function internalLogDirectories(config) {
+  const logs = config.documents.logs.path;
+  const directories = [DOCUMENT_ZONE + '/logs', ...(isDocumentZone(logs) ? [logs] : [])];
+  const key = path => process.platform === 'win32' ? path.toLowerCase() : path;
+  return directories.filter((path, index) => directories.findIndex(other => key(other) === key(path)) === index);
+}
+export function frameworkIgnorePatterns(config) {
+  const literalDirectory = path => '/' + path.slice('.0-code/'.length).replace(/[\[\]!*?# ]/g, '\\$&') + '/';
+  return ['/run/', ...internalLogDirectories(config).map(literalDirectory)];
+}
+// Historical source trees and pre-config installations keep these paths until migration.
+export const LEGACY_DOCUMENT_DEFAULTS = Object.freeze({
   state: Object.freeze({ path: 'docs/STATE.md' }),
   roadmap: Object.freeze({ path: 'docs/ROADMAP.md' }),
   reports: Object.freeze({ path: 'docs/reports', name: '<version>_<name>.md' }),
@@ -19,6 +36,10 @@ export const DOCUMENT_DEFAULTS = Object.freeze({
   templates: Object.freeze({ path: 'docs/prompts/templates', name: '<name>.md' }),
   userdocs: Object.freeze({ path: 'docs/userdocs', name: '<version>_<name>.md' }),
 });
+export const DOCUMENT_DEFAULTS = Object.freeze(Object.fromEntries(
+  Object.entries(LEGACY_DOCUMENT_DEFAULTS).map(([role, document]) =>
+    [role, Object.freeze({ ...document, path: '.0-code/' + document.path })]),
+));
 export const MODULE_DEFAULTS = Object.freeze({ audits: true, session_logs: true, token_usage: true,
   telegram: false, pm2: false, mcp_catalog: true, toolset: true });
 
@@ -59,7 +80,7 @@ function checkSchema(value, schema, path = 'config') {
 }
 
 // This is a path in the project, not a URL, shell expression or path on the owner's machine.
-export function projectRelativePath(value, { allowRoot = false, allowFramework = false } = {}) {
+export function projectRelativePath(value, { allowRoot = false, allowFramework = false, allowDocuments = false } = {}) {
   if (allowRoot && value === '.') return value;
   if (typeof value !== 'string' || !value.trim() || /[\x00-\x1f:*?<>|]/.test(value)
     || isAbsolute(value) || win32.isAbsolute(value)) throw new Error('Document path must be project-relative');
@@ -67,7 +88,7 @@ export function projectRelativePath(value, { allowRoot = false, allowFramework =
   if (parts.some(part => !part || part === '.' || part === '..' || /[ .]$/.test(part)
     || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) throw new Error('Invalid document path');
   if (parts.some(part => part.toLowerCase() === '.git')) throw new Error('Document path cannot use .git');
-  if (!allowFramework && parts[0].toLowerCase() === '.0-code') throw new Error('Project documents must be outside framework code');
+  if (!allowFramework && parts[0].toLowerCase() === '.0-code' && !(allowDocuments && isDocumentZone(parts.join('/')))) throw new Error('Project documents must be outside framework code or inside .0-code/docs');
   return parts.join('/');
 }
 
@@ -78,7 +99,7 @@ function normalizeName(value) {
   return value;
 }
 
-export function normalizeProjectConfig(input = {}) {
+export function normalizeProjectConfig(input = {}, { documentDefaults = DOCUMENT_DEFAULTS } = {}) {
   checkSchema(input, SCHEMA);
   const config = {
     schema_version: 1, framework_version: frameworkVersion(), engines: ['claude'], language: 'en',
@@ -89,19 +110,33 @@ export function normalizeProjectConfig(input = {}) {
   config.modules = { ...MODULE_DEFAULTS, ...input.modules };
   config.toolset = { scope: 'user', defaults: true, enable: [], disable: [], ...input.toolset };
   config.guard = { mode: 'arbiter', ...input.guard };
-  for (const [role, fallback] of Object.entries(DOCUMENT_DEFAULTS)) {
+  config.instructions = { claude: 'project-file', ...input.instructions };
+  if(config.instructions.claude_settings==='.0-code/claude/settings.json'&&(!config.engines.includes('claude')||config.instructions.claude!=='session-hook'))throw new Error('Session settings require the Claude engine and session-hook instructions');
+  for (const [role, fallback] of Object.entries(documentDefaults)) {
     config.documents[role] = { ...fallback, ...input.documents?.[role] };
-    config.documents[role].path = projectRelativePath(config.documents[role].path, { allowRoot: 'name' in fallback });
+    const runtimeLogs = role === 'logs' && /^\.0-code\/run\/logs(?:\/|$)/.test(config.documents[role].path);
+    config.documents[role].path = projectRelativePath(config.documents[role].path, { allowRoot: 'name' in fallback, allowDocuments: true, allowFramework: runtimeLogs });
+    if (!('name' in fallback) && config.documents[role].path.toLowerCase() === DOCUMENT_ZONE) throw new Error('Document file cannot replace the document zone directory');
     if ('name' in config.documents[role]) config.documents[role].name = normalizeName(config.documents[role].name);
   }
   const state = config.documents.state.path.toLowerCase(), roadmap = config.documents.roadmap.path.toLowerCase();
+  if (config.instructions.claude === 'session-hook' && [state, roadmap].some(isClaudeInstructionPath)) throw new Error('session-hook document roles cannot use CLAUDE.md');
   if (state === roadmap || state.startsWith(roadmap + '/') || roadmap.startsWith(state + '/')) throw new Error('STATE and ROADMAP paths overlap');
   for (const [role, document] of Object.entries(config.documents)) {
     if (role === 'state' || role === 'roadmap') continue;
     const directory = document.path.toLowerCase();
     if ([state,roadmap].some(file => directory === file || directory.startsWith(file + '/'))) throw new Error('Document directory overlaps a document file');
   }
+  if (config.documents.logs.path.toLowerCase() === DOCUMENT_ZONE) throw new Error('Internal logs need a separate document directory');
+  for (const [role, document] of Object.entries(config.documents)) {
+    if (role === 'logs' || !isDocumentZone(document.path)) continue;
+    const directory = document.path.toLowerCase();
+    if (internalLogDirectories(config).some(logs => directory === logs.toLowerCase() || directory.startsWith(logs.toLowerCase() + '/'))) throw new Error('Durable documents overlap internal session logs');
+  }
   if (config.toolset.enable.some(id => config.toolset.disable.includes(id))) throw new Error('Tool is both enabled and disabled');
+  for (const path of config.instructions.project_rules || []) {
+    if (projectRelativePath(path, { allowDocuments: true }) !== path || !isDocumentZone(path) || path === DOCUMENT_ZONE) throw new Error('Project rules must be files inside .0-code/docs');
+  }
   checkSchema(config, SCHEMA);
   return config;
 }
@@ -118,8 +153,8 @@ export function findProjectRoot(start = process.cwd()) {
 }
 
 // Inspect existing ancestors before any future write. Symlinks are not ownership evidence.
-export function resolveProjectPath(projectDir, path, { allowRoot = false, allowFramework = false } = {}) {
-  const root = resolve(projectDir), destination = resolve(root, projectRelativePath(path, { allowRoot, allowFramework }));
+export function resolveProjectPath(projectDir, path, { allowRoot = false, allowFramework = false, allowDocuments = false } = {}) {
+  const root = resolve(projectDir), destination = resolve(root, projectRelativePath(path, { allowRoot, allowFramework, allowDocuments }));
   const rel = relative(root, destination);
   if (rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) throw new Error('Path escapes the project');
   let current = root;
@@ -144,12 +179,17 @@ export function loadProjectConfig({ projectDir = findProjectRoot(), config, env 
     try { config = JSON.parse(readFileSync(file, 'utf8')); }
     catch { throw new Error('Project config cannot be read as JSON'); }
   }
-  const effective = normalizeProjectConfig(config === undefined ? {} : config);
+  const effective = normalizeProjectConfig(config === undefined ? { documents: LEGACY_DOCUMENT_DEFAULTS } : config);
+  const safeDocumentPath = destination => {
+    if (effective.instructions.claude === 'session-hook' && isClaudeInstructionPath(relative(projectDir, destination))) throw new Error('session-hook document roles cannot use CLAUDE.md');
+    return destination;
+  };
   // A configured STATE can be overridden by the driver's explicit state flag.
   const rolePath = (role, values) => {
     const document = effective.documents[role];
     if (!document) throw new Error('Unknown document role');
-    if (!values || !document.name) return resolveProjectPath(projectDir, document.path, { allowRoot: 'name' in document });
+    const allowFramework = role === 'logs' && /^\.0-code\/run\/logs(?:\/|$)/.test(document.path);
+    if (!values || !document.name) return safeDocumentPath(resolveProjectPath(projectDir, document.path, { allowRoot: 'name' in document, allowDocuments: true, allowFramework }));
     const filename = document.name.replace(/<(version|name|date|id)>/g, (_, key) => {
       const value = values[key];
       if (value === undefined || value === null) throw new Error(`Missing document name value: ${key}`);
@@ -157,7 +197,7 @@ export function loadProjectConfig({ projectDir = findProjectRoot(), config, env 
       if (safe.includes('/')) throw new Error('Document name value cannot contain a directory');
       return safe;
     });
-    return resolveProjectPath(projectDir, join(document.path, filename));
+    return safeDocumentPath(resolveProjectPath(projectDir, join(document.path, filename), { allowDocuments: true, allowFramework }));
   };
   const runtimeDir = installed ? join(projectDir, '.0-code', 'run') : dirname(rolePath('state'));
   return {

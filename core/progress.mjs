@@ -12,7 +12,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { DOCUMENT_DEFAULTS } from './project-config.mjs';
+import { LEGACY_DOCUMENT_DEFAULTS } from './project-config.mjs';
 
 function git(cwd, args) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
@@ -53,7 +53,7 @@ export function assessProgress(before, after) {
 }
 
 // Escalation directive appended to the next turn's prompt (after `stagnantTurns` empty turns).
-export function escalationDirective(prompt, stagnantTurns, statePath = DOCUMENT_DEFAULTS.state.path) {
+export function escalationDirective(prompt, stagnantTurns, statePath = LEGACY_DOCUMENT_DEFAULTS.state.path) {
   return `${prompt}\n\n[SUPERVISOR ESCALATION] The previous turns (${stagnantTurns} in a row) ` +
     `produced no measurable progress: no git changes and no ${statePath} update. Stop planning — ` +
     'EXECUTE the next concrete step with tools (Bash/Edit/Write) in this very turn and record the ' +

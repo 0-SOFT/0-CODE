@@ -1,8 +1,8 @@
-<!-- tracks: README.md sha256:3861ef6052d0 -->
+<!-- tracks: README.md sha256:6be15af01675 -->
 
 # 0-CODE
 
-**버전:** v2.0.4
+**버전:** v2.1.0
 
 기존 프로젝트에 통합하는 **Claude Code, Codex, OpenCode**용 자율 개발 사이클입니다. 하나의 사이클 지시에 조사, 구현, 수정, 감사, 릴리스 작업을 함께 담을 수 있습니다.
 
@@ -25,6 +25,18 @@
 [공개 목록](toolset/CATALOG.md)에는 **기본 MCP 다섯 개: context7, playwright, chrome-devtools, sequential-thinking, memory**가 있습니다. npm 패키지는 검증된 SemVer 최소 버전 이상이며 이름과 진입점이 올바라야 합니다. 조건에 맞는 더 최신 버전은 보존하세요. 외부 API 키는 필요 없으며 브라우저 도구에는 사용 가능한 브라우저도 필요합니다. 등록과 doctor 성공만으로 실제 연결을 입증하지는 않습니다. 비공개 스킬, 에이전트, 명령, 규칙의 구현 파일은 제외됩니다. MCP 매니페스트의 선택적 계정 서비스 예시는 명시적 설정과 인증 전까지 꺼져 있습니다.
 
 기본은 프로젝트들이 공유하는 **사용자당 하나의 독립 설치**입니다. 같은 선택을 반복 설치해도 변경되지 않습니다. project 범위로 다른 선택을 프로젝트에 고정할 수 있습니다. 프로젝트 제거는 머신 도구를 남기며 `uninstall-tools`가 별도로 도구를 제거하고 원래 네이티브 설정을 복원합니다. 인증은 복사하지 않습니다. [설정과 사전 조건](docs/PROJECT_SETTINGS.md).
+
+## 2.1.0의 문서, 이전 및 소유권
+
+새 설치는 아홉 문서 역할을 `.0-code/docs/` 아래에 둡니다: `STATE.md`, `ROADMAP.md`, `reports/`, `decisions/`, `todo/`, `logs/`, `prompts/`, `prompts/templates/`, `userdocs/`. 영구 문서는 Git에 저장하고 세션 로그는 제외합니다. 로그는 `.0-code/run/logs/`에도 둘 수 있지만 영구 역할에는 런타임 영역을 사용할 수 없습니다. 명시적 외부 역할은 계속 지원하며 일반 upgrade는 기존 경로를 유지합니다. 문서는 소유권 영수증에 포함되지 않습니다. doctor는 이를 허용하고 upgrade는 보존하며 uninstall은 문서와 디렉터리를 남기고 런타임 및 백업을 삭제합니다.
+
+2.0.x의 표준 `docs/*` 역할은 `upgrade --relocate-documents <files.json>` 또는 `migrate --relocate-documents <files.json>`으로 명시적으로 이전하며 먼저 `--dry-run`을 사용합니다. 정확한 파일 목록을 검토하세요. 목록에 없는 제품 문서는 그대로 남습니다. 설정, STATE 참조 및 선택한 템플릿을 갱신하고 변경 전 바이트를 보관합니다. 사용자 지정 외부 경로는 유지됩니다. 이전이나 설치 인수 전에 주기를 완료하고 백그라운드 작업 결과를 수집한 뒤 드라이버를 중지하세요. 활성 잠금이나 입력 변경은 거부됩니다. 이동을 함께 Git에 스테이징하면 이름 변경을 인식할 수 있습니다.
+
+영수증 없는 수정된 `.0-code/` 설치는 검토한 SHA-256 및 `replace`/`preserve` 동작을 담은 `migrate --adopt-manifest <manifest.json>`으로 인수합니다. 정확히 나열한 `bin/`, `claude/`, `.0-code/README.md` 프로젝트 확장만 보존할 수 있으며 프레임워크 코드는 교체하고 보관합니다. 확장은 편집 가능하며 upgrade/uninstall 후에도 남습니다. 알 수 없는 파일이나 해시 불일치는 거부하며 인수와 문서 이전은 별도 작업입니다. 생성된 가이드를 교체하기 전에 자체 AGENT 규칙을 문서로 저장하고 `instructions.project_rules`로 참조하세요.
+
+Claude는 `instructions.claude: session-hook`으로 `CLAUDE.md`에 쓰지 않고 실행할 수 있습니다. 세션 설정에는 `instructions.claude_settings: .0-code/claude/settings.json`을 선택하고 실행기, MCP, system-prompt를 유지하세요. `claude --settings .0-code/claude/settings.json`으로 실행해야 하며 일반 세션은 이 파일을 자동으로 로드하지 않습니다. 호환 설정은 기존 정책을 유지하고 외부 Stop/guard 훅은 검토가 필요합니다. Uninstall은 원래 설정을 복원합니다. Doctor는 로컬 훅을 확인하지만 사용자/managed/CLI 재정의는 평가하지 않습니다. [형식, 명령 및 제한](docs/PROJECT_SETTINGS.md).
+
+2.1.0의 개발 인수 검증은 Windows와 Node 24에서 수행했습니다. Linux, macOS 및 Node 20/22는 포함하지 않았으며, CI 매트릭스 설정만으로 실행을 입증할 수는 없습니다. 파일 시스템 및 커버리지 제한은 [검증 범위](docs/PROJECT_SETTINGS.md#validation-scope)를 참고하세요.
 
 ## 작업과 유지보수
 

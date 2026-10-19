@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { basename, extname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadProjectConfig, projectRelativePath } from './project-config.mjs';
-import { readInstallationReceipt } from './project-installation.mjs';
+import { readInstallationReceipt, claudeSettingsPath } from './project-installation.mjs';
 import { InstallationPlan, applyInstallationPlan, fileSnapshot, recoverInstallation } from './installation-transaction.mjs';
 import { parseYaml } from '../lib/yaml-mini.mjs';
 function header(bytes, label) {
@@ -42,7 +42,7 @@ export function planProjectStart(root, promptFile, { maxIterations } = {}) {
   plan.change('.0-code/run/.loop-progress', null, { overwrite: true });
   plan.assertReady();
   const drivers = project.config.engines.map(engine => ({ engine,
-    argv: engine === 'claude' ? ['claude'] : ['node', '.0-code/core/supervisor.mjs', '--backend', engine], cwd: project.projectDir }));
+    argv: engine === 'claude' ? ['claude',...(claudeSettingsPath(project.config)==='.0-code/claude/settings.json'?['--settings',claudeSettingsPath(project.config)]:[])] : ['node', '.0-code/core/supervisor.mjs', '--backend', engine], cwd: project.projectDir }));
   return { project, plan, patch, prompt: target, drivers };
 }
 export function startProjectCycle(root, promptFile, options = {}) {

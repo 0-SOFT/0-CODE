@@ -34,7 +34,7 @@ import {
 import { noticeAfterTurn } from './secret-notice.mjs';
 import { resolveEngineSettings, parseDuration } from './engine-settings.mjs';
 import { loadCodexEnvironment, loadEngineSettingsEnvironment } from '../lib/codex-env.mjs';
-import { CONFIG_PATH, findProjectRoot, loadProjectConfig } from './project-config.mjs';
+import { CONFIG_PATH, findProjectRoot, loadProjectConfig, isClaudeInstructionPath } from './project-config.mjs';
 import { saveTurnJournal } from './turn-journal.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url))); // framework root (../ from core/)
@@ -110,6 +110,7 @@ export async function runLoop({
     env: loadEngineSettingsEnvironment(envFiles, backend?.env || process.env) });
   stateFile = stateFile ? resolve(stateFile) : project.documentPath('state');
   const statePath = relative(projectDir, stateFile).replaceAll('\\', '/');
+  if (project.config.instructions.claude === 'session-hook' && isClaudeInstructionPath(statePath)) throw new Error('session-hook state updates cannot write CLAUDE.md');
   const settingsEnv = project.guardEnvironment;
   if (project.installed && !settingsEnv.SAFETY_GUARD_LOG) settingsEnv.SAFETY_GUARD_LOG = project.runtimePath('guard.log');
   backend = backend || getBackend(backendId || settingsEnv.AGENT_BACKEND

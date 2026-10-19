@@ -5,6 +5,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { resolveProjectPath, projectRelativePath } from './project-config.mjs';
 import { replaceFileSync, retryWindowsFileOperation } from '../lib/replace-file.mjs';
+import { enterLoopMutationAt, isPidAlive, ownerState } from './loop-lock.mjs';
+import { assertBeforeImages, clearBeforeImages, isBeforeStoragePath, prepareBeforeImages, readBeforeImage } from './installation-journal-storage.mjs';
 
 const JOURNAL = '.0-code/run/installation-transaction.json';
 const LOCK = '.0-code/run/installation.lock';
@@ -40,12 +42,50 @@ export function fileSnapshot(root,path) {
   return snapshotFile(contained(root,path));
 }
 
+export function assertCycleRelocationStopped(root, paths) {
+  for (const lockPath of paths) {
+    for (const path of [lockPath, lockPath.replace(/\.loop\.lock$/, '.loop-children')]) {
+      const {bytes}=fileSnapshot(root,path);if(bytes===null)continue;
+      let value;try {value=JSON.parse(bytes.toString('utf8'));}catch {throw new Error('Ambiguous cycle runtime: '+path);}
+      if(path===lockPath) {
+        if(!value||!Number.isInteger(value.pid)||value.pid<=0||!value.engine||!value.startedAt)throw new Error('Ambiguous cycle lock: '+path);
+        if(isPidAlive(value.pid)||!['dead','stale'].includes(ownerState(value)))throw new Error('Stop the active cycle before document relocation or recovery');
+      } else {
+        if(!Array.isArray(value?.pids)||value.pids.some(pid=>!Number.isInteger(pid)||pid<=0))throw new Error('Ambiguous cycle children: '+path);
+        if(value.pids.some(isPidAlive))throw new Error('Stop active cycle children before document relocation or recovery');
+      }
+    }
+  }
+}
+export function enterCycleRelocationGuard(root, paths) {
+  assertCycleRelocationStopped(root,paths);
+  const leaves=[],missing=new Set();
+  for(const path of paths) {
+    let directory=dirname(path).replaceAll('\\','/');
+    while(directory!=='.'&&!existsSync(contained(root,directory))) {missing.add(directory);directory=dirname(directory).replaceAll('\\','/');}
+  }
+  const release=()=>{
+    const failures=[];
+    for(const leave of [...leaves].reverse())try {leave();}catch(error){failures.push(error);}
+    if(failures.length)throw failures.length===1?failures[0]:new AggregateError(failures,'Cycle guards could not all be released');
+    return removeEmpty(root,[...missing],{deferBusy:true});
+  };
+  try {
+    for(const path of paths) {
+      const leave=enterLoopMutationAt(contained(root,path));
+      if(!leave)throw new Error('Cycle lock mutation is active; retry document relocation or recovery');
+      leaves.push(leave);
+    }
+    assertCycleRelocationStopped(root,paths);return release;
+  } catch(error) {return runThenRelease(release,()=>{throw error;});}
+}
+
 export class InstallationPlan {
   constructor(root,{allowedPaths=null}={}) { this.root=resolve(root);this.allowedPaths=normalizeInstallationPaths(allowedPaths);this.changes=[];this.conflicts=[]; }
   change(path,content,{overwrite=false,expectedHash,mode=0o644,preserveMode=true}={}) {
     const normalized=projectRelativePath(path,{allowFramework:true});
     assertWriteAllowed(this.allowedPaths,normalized);
-    if(normalized===JOURNAL || normalized===GROUP_JOURNAL || STAGING_CONFLICTS.some(path=>normalized===path||normalized.startsWith(path+'/')) || normalized===RUN_IGNORE || normalized===LOCK || normalized.startsWith(LOCK+'/')) throw new Error('Installation plan uses transaction internals');
+    if(normalized===JOURNAL || normalized===GROUP_JOURNAL || isBeforeStoragePath(normalized) || STAGING_CONFLICTS.some(path=>normalized===path||normalized.startsWith(path+'/')) || normalized===RUN_IGNORE || normalized===LOCK || normalized.startsWith(LOCK+'/')) throw new Error('Installation plan uses transaction internals');
     if(this.changes.some(entry=>entry.path===normalized)) throw new Error('Duplicate path in installation plan');
     const before=fileSnapshot(this.root,normalized),after=content===null?null:Buffer.from(content);
     const afterHash=hashBytes(after);
@@ -57,6 +97,7 @@ export class InstallationPlan {
     return true;
   }
   assertReady() {
+    this.preflight?.();
     if(this.conflicts.length) { const error=new Error('Installation intersections require a decision');error.conflicts=this.conflicts;throw error; }
     for(const entry of this.changes) {
       assertWriteAllowed(this.allowedPaths,entry.path);
@@ -77,12 +118,41 @@ function missingDirectories(root,changes) {
   }
   return [...missing].sort((a,b)=>a.split('/').length-b.split('/').length);
 }
-function removeEmpty(root,directories) {
+function removeEmpty(root,directories,{deferBusy=false}={}) {
+  const warnings=[];
   for(const path of [...directories].sort((a,b)=>b.split('/').length-a.split('/').length)) {
     try { retryWindowsFileOperation(()=>rmdirSync(contained(root,path)),{
       validate:()=>contained(root,path),retryCodes:['EPERM','EACCES','EBUSY','ENOTEMPTY']}); }
-    catch(error) { if(!['ENOENT','ENOTEMPTY','EEXIST'].includes(error.code)) throw error; }
+    catch(error) {
+      if(['ENOENT','ENOTEMPTY','EEXIST'].includes(error.code))continue;
+      // Only guard-created directories are optional; real mutex and recovery cleanup stay strict.
+      if(!deferBusy||process.platform!=='win32'||error.code!=='EBUSY')throw error;
+      let stat;
+      try {stat=lstatSync(contained(root,path));}catch(inspectionError){if(inspectionError.code==='ENOENT')continue;throw inspectionError;}
+      if(!stat.isDirectory())throw error;
+      const warning={code:'RELOCATION_DIRECTORY_CLEANUP_DEFERRED',path,errorCode:error.code,
+        message:'Directory retained after cycle guards were released; retry optional cleanup later'};
+      process.stderr.write('0-CODE cleanup warning: '+JSON.stringify(warning)+'\n');
+      warnings.push(warning);
+    }
   }
+  return warnings;
+}
+function runThenRelease(leave,action) {
+  let result,failure,failed=false;
+  try {result=action();}catch(error){failed=true;failure=error;}
+  let warnings;
+  try {warnings=leave?.()||[];}
+  catch(cleanupError){throw failed?new AggregateError([failure,cleanupError],'Installation and cycle guard release failed',{cause:failure}):cleanupError;}
+  if(failed) {
+    if(!warnings.length)throw failure;
+    // A frozen Error or a primitive exception must survive without an attempted mutation.
+    const diagnostic=new Error(failure instanceof Error?failure.message:'Installation failed; optional cycle directory cleanup was deferred',{cause:failure});
+    if(failure?.code!==undefined)diagnostic.code=failure.code;
+    diagnostic.cleanupWarnings=warnings;
+    throw diagnostic;
+  }
+  return warnings.length?{...result,cleanupWarnings:[...(result?.cleanupWarnings||[]),...warnings]}:result;
 }
 function stagingPath(path) {return join(dirname(path),`.0code-${randomUUID()}.tmp`).replaceAll('\\','/');}
 function validateStaging(root,path,target,occupied=[]) {
@@ -151,6 +221,7 @@ function publish(root,path,bytes,mode,expected,registeredStaging,publicationJour
 }
 function restoreJournal(root,journal,{journalPath=JOURNAL}={}) {
   assertNoStagingConflict(root);
+  assertBeforeImages(root,journal);
   // Check the entire journal before restoring one file: an unexpected byte belongs to somebody else.
   for(const entry of journal.changes) {
     const current=fileSnapshot(root,entry.path).hash;
@@ -159,25 +230,34 @@ function restoreJournal(root,journal,{journalPath=JOURNAL}={}) {
   assertJournalStaging(root,journal);clearJournalStaging(root,journal);
   for(const entry of [...journal.changes].reverse()) {
     const current=fileSnapshot(root,entry.path).hash;
-    if(current!==entry.beforeHash) publish(root,entry.path,entry.before===null?null:Buffer.from(entry.before,'base64'),entry.beforeMode??0o644,current,entry.staging,journalPath);
+    if(current!==entry.beforeHash) publish(root,entry.path,readBeforeImage(root,journal,entry),entry.beforeMode??0o644,current,entry.staging,journalPath);
   }
 }
 function validJournal(root,journal) {
   if(!journal || journal.schema_version!==1 || !Array.isArray(journal.changes) || !Array.isArray(journal.missingDirectories)) throw new Error('Invalid installation recovery journal');
   const seen=new Set();
+  if(journal.cycleLockPaths!==undefined) {
+    if(!Array.isArray(journal.cycleLockPaths)||!journal.cycleLockPaths.length||new Set(journal.cycleLockPaths).size!==journal.cycleLockPaths.length
+      ||journal.cycleLockPaths.some(path=>typeof path!=='string'||!/(?:^|\/)\.loop\.lock$/.test(path)||projectRelativePath(path,{allowFramework:true})!==path))
+      throw new Error('Invalid relocation recovery lock paths');
+    for(const path of journal.cycleLockPaths)contained(root,path);
+  }
   for(const entry of journal.changes) {
-    if(typeof entry.path!=='string'||seen.has(entry.path)||entry.path===JOURNAL||STAGING_CONFLICTS.some(path=>{const value=projectRelativePath(entry.path,{allowFramework:true});return value===path||value.startsWith(path+'/');})||entry.path===RUN_IGNORE||entry.path===LOCK||entry.path.startsWith(LOCK+'/')) throw new Error('Invalid installation recovery entry');
+    if(typeof entry.path!=='string'||seen.has(entry.path)||entry.path===JOURNAL||isBeforeStoragePath(entry.path)||STAGING_CONFLICTS.some(path=>{const value=projectRelativePath(entry.path,{allowFramework:true});return value===path||value.startsWith(path+'/');})||entry.path===RUN_IGNORE||entry.path===LOCK||entry.path.startsWith(LOCK+'/')) throw new Error('Invalid installation recovery entry');
     seen.add(entry.path);
     contained(root,entry.path);
-    if(entry.before!==null && typeof entry.before!=='string') throw new Error('Invalid recovery bytes');
-    if(hashBytes(entry.before===null?null:Buffer.from(entry.before,'base64'))!==entry.beforeHash
-      || (entry.afterHash!==null && !/^[a-f0-9]{64}$/.test(entry.afterHash))) throw new Error('Invalid recovery fingerprint');
+    if(!Object.hasOwn(entry,'beforeFile')) {
+      if(entry.before!==null && typeof entry.before!=='string' || Object.hasOwn(entry,'beforeFileIdentity')) throw new Error('Invalid recovery bytes');
+      if(hashBytes(entry.before===null?null:Buffer.from(entry.before,'base64'))!==entry.beforeHash) throw new Error('Invalid recovery fingerprint');
+    }
+    if(entry.afterHash!==null && !/^[a-f0-9]{64}$/.test(entry.afterHash)) throw new Error('Invalid recovery fingerprint');
   }
   const occupied=[...seen,JOURNAL,GROUP_JOURNAL,RUN_IGNORE,LOCK];
   for(const entry of journal.changes)validateStaging(root,entry.staging,entry.path,occupied);
   if(journal.runtimeIgnoreStaging!==undefined&&!journal.runtimeIgnoreCreated)throw new Error('Invalid runtime ignore staging');
   validateStaging(root,journal.runtimeIgnoreStaging,RUN_IGNORE,occupied);
   for(const path of journal.missingDirectories) contained(root,path);
+  assertBeforeImages(root,journal);
   return journal;
 }
 function assertMutationAvailable(root) {
@@ -251,20 +331,32 @@ export function recoverInstallation(root) {
     const ignore=fileSnapshot(root,RUN_IGNORE).bytes;
     if(ignore!==null&&!ignore.equals(Buffer.from('*\n')))throw new Error('Recovery runtime ignore changed');
   }
-  releaseDeadLock(root);
-  acquireMutationLock(root);
-  try {
-    restoreJournal(root,journal);unlinkSync(file);
-    if(journal.runtimeIgnoreCreated) { try { unlinkSync(contained(root,RUN_IGNORE)); } catch(error) { if(error.code!=='ENOENT') throw error; } }
-  } finally { releaseMutationLock(root); }
+  const leave=journal.cycleLockPaths?enterCycleRelocationGuard(root,journal.cycleLockPaths):null;
+  const result=runThenRelease(leave,()=>{
+    releaseDeadLock(root);
+    acquireMutationLock(root);
+    try {
+      restoreJournal(root,journal);unlinkSync(file);
+      // Forget the recovery journal before its images: a crash can orphan images, never leave an unusable journal.
+      clearBeforeImages(root,journal);
+      if(journal.runtimeIgnoreCreated) { try { unlinkSync(contained(root,RUN_IGNORE)); } catch(error) { if(error.code!=='ENOENT') throw error; } }
+    } finally { releaseMutationLock(root); }
+    return {recovered:true,files:journal.changes.length};
+  });
   removeEmpty(root,journal.missingDirectories);
-  return {recovered:true,files:journal.changes.length};
+  return result;
 }
 
 export function applyInstallationPlan(plan,{removeRuntimeIgnore=false}={}) {
   plan.assertReady();
+  const leave = plan.enterGuard?.();
+  return runThenRelease(leave,()=>applyGuardedInstallationPlan(plan,{removeRuntimeIgnore}));
+}
+
+function applyGuardedInstallationPlan(plan,{removeRuntimeIgnore=false}={}) {
+  plan.assertReady();
   if(!plan.changes.length) return {changed:0};
-  const root=plan.root,lock=contained(root,LOCK),file=contained(root,JOURNAL);
+  const root=plan.root,file=contained(root,JOURNAL);
   if(existsSync(contained(root,GROUP_JOURNAL)))throw new Error('A coordinated installation requires recovery with all authorized profile roots');
   if(existsSync(file)) throw new Error('Unfinished installation transaction; recover it before continuing');
   releaseDeadLock(root);
@@ -272,17 +364,21 @@ export function applyInstallationPlan(plan,{removeRuntimeIgnore=false}={}) {
   const previousIgnore=fileSnapshot(root,RUN_IGNORE);
   if(previousIgnore.bytes!==null && previousIgnore.bytes.toString('utf8')!=='*\n') throw new Error('Installation runtime ignore intersects existing project data');
   try { acquireMutationLock(root); } catch(error) { removeEmpty(root,missing);throw error; }
-  let complete=false,journalWritten=false,retainLock=false;
-  const journal={schema_version:1,missingDirectories:missing,runtimeIgnoreCreated:previousIgnore.bytes===null,
-    ...(previousIgnore.bytes===null?{runtimeIgnoreStaging:stagingPath(RUN_IGNORE)}:{}),changes:plan.changes.map(entry=>({path:entry.path,staging:stagingPath(entry.path),
-    before:entry.before===null?null:entry.before.toString('base64'),beforeHash:entry.beforeHash,beforeMode:entry.beforeMode,afterHash:entry.afterHash}))};
+  let complete=false,journalWritten=false,retainLock=false,journal;
   try {
     // A second installer or editor might have touched a destination while we acquired the lock.
     plan.assertReady();
+    const {fields,...storage}=prepareBeforeImages(root,plan.changes);
+    journal={schema_version:1,missingDirectories:missing,runtimeIgnoreCreated:previousIgnore.bytes===null,...storage,
+      ...(plan.cycleLockPaths?{cycleLockPaths:[...plan.cycleLockPaths]}:{}),
+      ...(previousIgnore.bytes===null?{runtimeIgnoreStaging:stagingPath(RUN_IGNORE)}:{}),changes:plan.changes.map((entry,index)=>({path:entry.path,staging:stagingPath(entry.path),
+        ...fields[index],beforeHash:entry.beforeHash,beforeMode:entry.beforeMode,afterHash:entry.afterHash}))};
     validJournal(root,journal);assertJournalStaging(root,journal,{unused:true});
     writeFileSync(file,JSON.stringify(journal)+'\n',{flag:'wx',mode:0o600});journalWritten=true;
     if(previousIgnore.bytes===null) publish(root,RUN_IGNORE,Buffer.from('*\n'),0o644,null,journal.runtimeIgnoreStaging);
     for(const [index,entry] of plan.changes.entries()) publish(root,entry.path,entry.after,entry.mode,entry.beforeHash,journal.changes[index].staging);
+    assertBeforeImages(root,journal);
+    unlinkSync(file);journalWritten=false;
     complete=true;
   } catch(error) {
     if(journalWritten&&error.installationStagingConflict) {
@@ -295,13 +391,16 @@ export function applyInstallationPlan(plan,{removeRuntimeIgnore=false}={}) {
     }
     throw error;
   } finally {
-    if(complete && journalWritten) unlinkSync(file);
-    if(complete&&removeRuntimeIgnore) unlinkSync(contained(root,RUN_IGNORE));
-    if(!retainLock)releaseMutationLock(root);
-    if(!existsSync(file) && !complete&&previousIgnore.bytes===null) {
-      try { unlinkSync(contained(root,RUN_IGNORE)); } catch(error) { if(error.code!=='ENOENT') throw error; }
+    try {
+      if(journal&&!existsSync(file))clearBeforeImages(root,journal);
+      if(complete&&removeRuntimeIgnore) unlinkSync(contained(root,RUN_IGNORE));
+      if(!existsSync(file) && !complete&&previousIgnore.bytes===null) {
+        try { unlinkSync(contained(root,RUN_IGNORE)); } catch(error) { if(error.code!=='ENOENT') throw error; }
+      }
+    } finally {
+      if(!retainLock)releaseMutationLock(root);
+      if(!complete&&!journalWritten) removeEmpty(root,missing);
     }
-    if(!complete&&!journalWritten) removeEmpty(root,missing);
   }
   return {changed:plan.changes.length};
 }

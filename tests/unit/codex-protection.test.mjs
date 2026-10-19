@@ -246,16 +246,20 @@ test('Windows outer PowerShell preserves UTF-8 JSON without adding a BOM in eith
   const f = fixture(t), capture = join(f.base, 'capture-input.mjs');
   writeFileSync(capture, "import {readFileSync} from 'node:fs'; const bytes=readFileSync(0); console.log(JSON.stringify({hex:bytes.toString('hex'),text:bytes.toString('utf8')}));\n");
   const handler = buildCodexHooks({ hookFile: capture }).hooks.PreToolUse[0].hooks[0];
+  assert.ok(Number.isFinite(handler.timeout) && handler.timeout > 0, 'Hook timeout must be a positive number of seconds');
+  const timeout = handler.timeout * 1000;
   const windows = /^(?:"([^"]+)"|(\S+)) (.+)$/.exec(handler.commandWindows);
   const bin = windows[1] || windows[2];
   const version = spawnSync(bin, ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString(); [Console]::InputEncoding.WebName'], { encoding: 'utf8', windowsHide: true });
   assert.equal(version.status, 0); t.diagnostic(version.stdout.trim());
   const input = event('git status # \u0434\u043e\u043c \u2014 \ud83d\ude00');
   for (const prefix of ['', '[Console]::InputEncoding=[Text.UTF8Encoding]::new($true); ']) {
+    const started = Date.now();
     const child = spawnSync(bin, ['-NoProfile', '-NonInteractive', '-Command', prefix + handler.commandWindows], {
-      cwd: f.project, input, encoding: 'utf8', windowsHide: true, timeout: 10000,
+      cwd: f.project, input, encoding: 'utf8', windowsHide: true, timeout,
     });
-    assert.equal(child.status, 0, child.stderr);
+    assert.equal(child.status, 0, JSON.stringify({ code: child.error?.code ?? null, signal: child.signal,
+      status: child.status, elapsedMs: Date.now() - started, timeout, stderr: child.stderr }));
     const received = JSON.parse(child.stdout);
     assert.ok(received.hex.startsWith('7b'), received.hex);
     assert.equal(received.text.trim(), input);

@@ -2,7 +2,7 @@
 import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { frameworkVersion, DOCUMENT_DEFAULTS } from './project-config.mjs';
+import { frameworkVersion, LEGACY_DOCUMENT_DEFAULTS, frameworkIgnorePatterns } from './project-config.mjs';
 import { describeProjectModules, enabledProjectModules } from './project-modules.mjs';
 import { selectToolset } from './toolset-selection.mjs';
 import { hashBytes } from './installation-transaction.mjs';
@@ -42,21 +42,24 @@ export function assembleInstallationBundle(config,{source=FRAMEWORK_SOURCE}={}) 
     if(path.endsWith('.mjs')&&!optional.has(path)) copy(path);
   }
   for(const path of ['VERSION','schemas/config.schema.json','hooks/ralph-loop-stop','hooks/ralph-loop-stop.mjs','hooks/safety-guard','hooks/safety-guard.mjs','hooks/run-hook.cmd','tools/0code.mjs','tools/mcp-reference-run.mjs','templates/cycle.md']) copy(path);
+  if(config.engines.includes('claude')&&config.instructions.claude==='session-hook') {
+    for(const path of ['hooks/project-context','hooks/project-context.mjs']) copy(path);
+  }
   if(existsSync(join(source,'config/legacy-installations.json')))copy('config/legacy-installations.json');
-  copy(existsSync(join(source,'schemas/STATE.schema.json'))?'schemas/STATE.schema.json':join(dirname(DOCUMENT_DEFAULTS.state.path),'schemas/STATE.schema.json'),'schemas/STATE.schema.json');
+  copy(existsSync(join(source,'schemas/STATE.schema.json'))?'schemas/STATE.schema.json':join(dirname(LEGACY_DOCUMENT_DEFAULTS.state.path),'schemas/STATE.schema.json'),'schemas/STATE.schema.json');
   for(const name of ['research','update','roadmap','guideline','decision']) {
-    const current=`templates/${name}.md`,legacy=`${DOCUMENT_DEFAULTS.templates.path}/${name}.md`;
+    const current=`templates/${name}.md`,legacy=`${LEGACY_DOCUMENT_DEFAULTS.templates.path}/${name}.md`;
     if(existsSync(join(source,current))) copy(current);
     else if(existsSync(join(source,legacy))) copy(legacy,`templates/${name}.md`);
   }
-  put('.gitignore','run/\n');
+  put('.gitignore',frameworkIgnorePatterns(config).join('\n')+'\n');
   put('.gitattributes','* -text -filter -working-tree-encoding -ident\n');
   put('AGENT.md',renderAgentGuide(config,{rules:config.toolset.scope==='project'?selection.selected.filter(entry=>entry.kind==='rules').map(entry=>entry.source):[]}));
   put('skills/orchestrator-wrapper/SKILL.md',`---\nname: orchestrator-wrapper\ndescription: Read the configured cycle state and roadmap, execute the current stage, and update state atomically.\n---\nRead .0-code/AGENT.md and .0-code/config.json. Work according to their document roles and active cycle prompt. The driver owns loop continuation.\n`);
   if(enabled.includes('audits')) {
     for(const path of ['core/audit-ledger.mjs','core/acceptance.mjs','commands/productionaudit.md','commands/productionauditloop.md']) copy(path);
     for(const path of files(source,'templates').filter(path=>/\/audit_.*\.md$|\/testing\.md$/.test(path))) copy(path);
-    for(const path of files(source,DOCUMENT_DEFAULTS.templates.path).filter(path=>/\/audit_.*\.md$|\/testing\.md$/.test(path))) {
+    for(const path of files(source,LEGACY_DOCUMENT_DEFAULTS.templates.path).filter(path=>/\/audit_.*\.md$|\/testing\.md$/.test(path))) {
       const target='templates/'+path.split('/').at(-1);if(!output.has(target)) copy(path,target);
     }
   }

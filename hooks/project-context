@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Pass stdin unchanged through the same cross-platform launcher as the cycle hooks.
+set -uo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+exec node "$DIR/project-context.mjs"

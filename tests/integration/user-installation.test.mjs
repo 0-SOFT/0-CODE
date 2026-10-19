@@ -45,6 +45,25 @@ test('late owner fields survive install and removal; changed owned body blocks t
   const before=bytes(f.home);assert.throws(()=>uninstallUserTools(f.options),/changed/);assert.deepEqual(bytes(f.home),before);assert.equal(doctorUserTools(f.options).ok,false);
   writeFileSync(role,saved);assert.equal(doctorUserTools(f.options).ok,true);uninstallUserTools(f.options);assert.deepEqual(JSON.parse(readFileSync(path)),{owner:'late'});
 });
+
+test('machine pool and native profile preserve document zones across removal and reinstall',t=>{
+  const f=fixture(t,{toolset:{defaults:false,enable:['skills/coding-standards']}});
+  const areas=['pool','claude','codex','xdg/opencode'];
+  for(const area of areas) {
+    f.put(area+'/.0-code/docs/owner.bin',Buffer.from([0,255,13,10]));
+    mkdirSync(join(f.home,area,'.0-code/docs/empty/nested'),{recursive:true});
+  }
+  for(let cycle=0;cycle<2;cycle++) {
+    installUserTools(f.options);
+    assert.equal(doctorUserTools(f.options).ok,true);
+    uninstallUserTools(f.options);
+    for(const area of areas) {
+      assert.deepEqual(readFileSync(join(f.home,area,'.0-code/docs/owner.bin')),Buffer.from([0,255,13,10]));
+      assert.equal(existsSync(join(f.home,area,'.0-code/docs/empty/nested')),true);
+      assert.equal(existsSync(join(f.home,area,'.0-code/installation.json')),false);
+    }
+  }
+});
 test('collisions, unowned directories and changed native roots refuse before writes',t=>{
   const f=fixture(t);f.put('codex/agents/0-code-architect.toml','owner file');const before=bytes(f.home);
   assert.throws(()=>installUserTools(f.options),/intersections/i);assert.deepEqual(bytes(f.home),before);

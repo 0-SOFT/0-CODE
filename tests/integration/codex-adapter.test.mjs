@@ -77,7 +77,9 @@ test('Windows without CIM or WMIC: a real child is killed and the supervisor ret
     assert.ok(probes.some(bin => /powershell\.exe$/i.test(bin)));
     const terminated = await exits[0];
     assert.notEqual(terminated.code, 0);
-    assert.throws(() => process.kill(children[0].pid, 0), /ESRCH/);
+    // The numeric PID can be reused after exit; verify the original child handle instead.
+    assert.deepEqual({ code: children[0].exitCode, signal: children[0].signalCode }, terminated);
+    assert.ok(children[0].exitCode !== null || children[0].signalCode !== null);
     assert.equal(context.liveChildCount(), 0);
     assert.ok(existsSync(join(p.dir, 'work-1.txt')));
   } finally {

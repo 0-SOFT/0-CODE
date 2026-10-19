@@ -4,9 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
+    # The private development repository has no Actions minutes: there the suite runs only on demand.
+    # The public repository checks every push and pull request.
+    if: github.repository == '0-SOFT/0-CODE' || github.event_name == 'workflow_dispatch'
     name: ${{ matrix.os }} / Node ${{ matrix.node }} / engines ${{ matrix.engines }}
     runs-on: ${{ matrix.os }}
     strategy:

@@ -34,7 +34,7 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseYaml } from '../lib/yaml-mini.mjs';
 import { isSubstantiveReason } from './permission-decision.mjs';
-import { DOCUMENT_DEFAULTS, loadProjectConfig } from './project-config.mjs';
+import { LEGACY_DOCUMENT_DEFAULTS, loadProjectConfig } from './project-config.mjs';
 
 // Two options is a fork, and flat thinking hides in forks: the second option is usually there to
 // make the first one look chosen. Three is the smallest number that forces a comparison.
@@ -192,7 +192,7 @@ export function findDecisionFor(projectDir, version, { dir, name } = {}) {
 
 // One line for the continuation header. Says what is there, or that nothing is — silence would put
 // us back where we started.
-export function summariseDecision(found, version, directory = DOCUMENT_DEFAULTS.decisions.path) {
+export function summariseDecision(found, version, directory = LEGACY_DOCUMENT_DEFAULTS.decisions.path) {
   if (!found) {
     return `decision record: none for ${version || 'this version'} — if this version chooses between ` +
       `ways of building something, write one under ${directory}/ before choosing`;

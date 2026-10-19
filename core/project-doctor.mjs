@@ -3,8 +3,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { loadProjectConfig } from './project-config.mjs';
-import { readInstallationReceipt, requireOwnership, validateExistingState } from './project-installation.mjs';
+import { loadProjectConfig, frameworkIgnorePatterns, isClaudeInstructionPath } from './project-config.mjs';
+import { readInstallationReceipt, requireOwnership, validateExistingState, claudeContextHooks, claudeSettingsPath, claudeRequiredHooks } from './project-installation.mjs';
+import { isDeepStrictEqual } from 'node:util';
 import { resolveMode } from './permission-decision.mjs';
 import { runCli } from './backends/spawn-cli.mjs';
 import { resolveCodexLaunch } from './backends/codex.mjs';
@@ -26,7 +27,44 @@ export function doctorProject(root, { env = process.env } = {}) {
   });
   check('state', () => { if (!existsSync(project.documentPath('state'))) throw new Error('Configured state is absent'); validateExistingState(readFileSync(project.documentPath('state'))); });
   check('runtime-ignore', () => {
-    if (!readFileSync(join(root, '.0-code/.gitignore'), 'utf8').split(/\r?\n/).includes('run/')) throw new Error('Runtime is not excluded from git');
+    if (!readFileSync(join(root, '.0-code/.gitignore'), 'utf8').split(/\r?\n/).includes('/run/')) throw new Error('Runtime is not excluded from git');
+  });
+  check('logs-ignore', () => {
+    const ignored=readFileSync(join(root,'.0-code/.gitignore'),'utf8').split(/\r?\n/);
+    const required=frameworkIgnorePatterns(project.config).slice(1);
+    if(required.some(path=>!ignored.includes(path))) throw new Error('Internal session logs are not excluded from git');
+  });
+  if(project.config.engines.includes('claude')&&claudeSettingsPath(project.config)==='.0-code/claude/settings.json')check('claude-session-settings',()=>{
+    const settings=JSON.parse(readFileSync(join(root,claudeSettingsPath(project.config)),'utf8'));
+    if(settings.disableAllHooks===true)throw new Error('Claude session hooks are disabled');
+    for(const [event,groups] of Object.entries(claudeRequiredHooks(project.config))) {
+      if(!groups.every(group=>(settings.hooks?.[event]||[]).filter(entry=>isDeepStrictEqual(entry,group)).length===1))throw new Error('Missing or duplicated session hook: '+event);
+    }
+    return 'Session overlay keeps native guard and loop hooks; launch Claude with --settings '+claudeSettingsPath(project.config);
+  });
+  if(project.config.engines.includes('claude')&&project.config.instructions.claude==='session-hook') check('claude-context',()=> {
+    if(!checks.find(check=>check.id==='owned-files')?.ok) throw new Error('Context hook requires verified installation bytes');
+    if(receipt.files.some(entry=>isClaudeInstructionPath(entry.path))) throw new Error('session-hook cannot own CLAUDE.md');
+    const settingsPath=claudeSettingsPath(project.config);
+    const settings=JSON.parse(readFileSync(join(root,settingsPath),'utf8'));
+    const localFile=join(root,'.claude/settings.local.json');
+    const local=existsSync(localFile)?JSON.parse(readFileSync(localFile,'utf8')):{};
+    if((local.disableAllHooks??settings.disableAllHooks)===true) throw new Error('Claude hooks are disabled in project settings');
+    for(const [event,groups] of Object.entries(claudeContextHooks())) {
+      if(!groups.every(group=>(settings.hooks?.[event]||[]).some(entry=>isDeepStrictEqual(entry,group)))) throw new Error(`Missing ${event} project context hook`);
+      const wrapper=join(project.frameworkDir,'hooks/run-hook.cmd');
+      const options={cwd:root,env:{...env,CLAUDE_PROJECT_DIR:root,ZERO_CODE_CONTEXT_WRAPPER:wrapper},
+        input:JSON.stringify({hook_event_name:event,cwd:root}),encoding:'utf8',windowsHide:true,timeout:15000};
+      // Expand a fixed environment reference once, rather than putting project path text in shell code.
+      const probe=process.platform==='win32'
+        ?spawnSync(join(env.SystemRoot||env.WINDIR||'C:\\Windows','System32/cmd.exe'),
+          ['/d','/s','/v:off','/c','""%ZERO_CODE_CONTEXT_WRAPPER%" project-context"'],{...options,windowsVerbatimArguments:true})
+        :runCli('bash',[wrapper,'project-context'],options);
+      if(probe.status!==0) throw new Error(`${event} project context failed`);
+      const result=JSON.parse(probe.stdout).hookSpecificOutput;
+      if(result?.hookEventName!==event||result.additionalContext!==readFileSync(join(project.frameworkDir,'AGENT.md'),'utf8')) throw new Error(`${event} project context is incomplete`);
+    }
+    return `Registered SessionStart and SubagentStart wrappers in ${settingsPath} return .0-code/AGENT.md; CLAUDE.md is not owned. User, managed and CLI hook overrides are not evaluated`;
   });
   const guardEnv = { ...project.guardEnvironment, SAFETY_GUARD_LOG: project.runtimePath('guard.log') };
   for (const engine of project.config.engines) {

@@ -9,14 +9,27 @@ All notable changes to this project are documented here. The format follows
 > below records what changed and — more usefully — **what was learned**. Where a decision was later
 > reversed, the reversal is listed too: this project treats a disproven assumption as a result.
 
-**Current version: v2.0.4.** Validation for this version is recorded with each change; earlier runs below are historical evidence.
+**Current version: v2.1.0.** Validation for this version is recorded with each change; earlier runs below are historical evidence. Final release acceptance and publication are separate from changing the version in the development branch.
 
-This public update includes changes from **1.21.0 through 2.0.4** after the published
-1.20.0. Version 1.21.0 was prepared locally but was not published. Older sections
+The 2.1.0 public update follows the published **2.0.4**. This changelog also retains
+the cumulative history from **1.21.0**; version 1.21.0 was prepared locally but was not published. Older sections
 record behavior and measurements at the time; current installation instructions
 are in [INTEGRATE](INTEGRATE.md) and [PROJECT_SETTINGS](docs/PROJECT_SETTINGS.md).
 Private development reports, decisions and task documents are excluded; configured
 document roles in installed projects remain part of the product.
+
+---
+
+## [v2.1.0] - 2026-10-18 - Cycle documents inside the framework namespace
+
+- New installations default all nine cycle document roles to `.0-code/docs/`. Framework-owned code, project-owned documents and ignored `.0-code/run/` runtime have distinct ownership rules. Doctor accepts internal documents; upgrade preserves them; uninstall retains documents and their directories while removing runtime and backups. Explicit external roles remain supported; session logs are ignored and may also live under `.0-code/run/logs/`.
+- `upgrade --relocate-documents <files.json>` and `migrate --relocate-documents <files.json>` explicitly relocate reviewed standard external cycle files. Dry-run previews config, STATE pointer and template updates; original changed bytes are archived. Unlisted product documentation and custom external roles stay in place. Active cycles, jobs, live locks, collisions and changed inputs refuse before application.
+- Relocation recognizes Windows path separators and case aliases while preserving references to unselected product files. Reviewed adoption also supports a STATE file at the project root. If Windows keeps an empty temporary directory busy after relocation guards have been released, the completed operation reports a cleanup warning; lock release, recovery and rollback errors still fail.
+- Document relocation switches only roles with explicitly selected files; unselected standard roles, including external `userdocs`, keep their paths and owner files. Reapplying the same manifest uses the saved migration index even while other standard roles remain external, and refuses changed recorded targets.
+- `instructions.claude: session-hook` loads `.0-code/AGENT.md` through native SessionStart/SubagentStart hooks without editing `CLAUDE.md`. An optional `.0-code/claude/settings.json` overlay applies only when explicitly loaded by the session or launcher. Doctor verifies local context hooks and reports the limits of user, managed and CLI override detection.
+- `migrate --adopt-manifest <manifest.json>` accepts a customized installation without a receipt through reviewed SHA-256 hashes and exact replace/preserve actions. Replaced code is archived; listed project `bin/`, `claude/` and README extensions remain editable and survive upgrade/uninstall. Compatible session settings preserve their policies and uninstall restores their original values. Custom instruction documents can be referenced through `instructions.project_rules`. Adoption and relocation require separate plans.
+- README and all ten translations, QUICKSTART, INTEGRATE and the project settings reference describe the new paths, lifecycle and manifest formats. Historical root-based 1.x migration still requires ownership evidence excluded from the public tree. Development version is 2.1.0; full release acceptance remains a separate gate.
+- Development acceptance used Windows and Node 24; it did not cover Linux, macOS or Node 20/22. Native symlink checks were unavailable on the validation filesystem. Line coverage has an 80% gate per measured source module; branch coverage has no pass threshold. Configured CI jobs do not establish execution results. See [validation scope](docs/PROJECT_SETTINGS.md#validation-scope).
 
 ---
 

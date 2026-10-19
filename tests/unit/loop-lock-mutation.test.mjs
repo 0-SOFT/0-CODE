@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import vm from 'node:vm';
 import { acquireLock, refreshLock, releaseLock, readLock, lockPath } from '../../core/loop-lock.mjs';
 import { cleanupTempDir } from '../helpers/index.mjs';
-import { DOCUMENT_DEFAULTS, loadProjectConfig } from '../../core/project-config.mjs';
+import { LEGACY_DOCUMENT_DEFAULTS, loadProjectConfig } from '../../core/project-config.mjs';
 import { replaceFileSync, retryWindowsFileOperation } from '../../lib/replace-file.mjs';
 
 // Real filesystem operations with one scheduler-controlled pause point. This forces the exact
@@ -16,7 +16,7 @@ function scheduledLock(overrides) {
   const source = fs.readFileSync(new URL('../../core/loop-lock.mjs', import.meta.url), 'utf8')
     .replace(/^import[\s\S]*?;\r?\n/gm, '').replace(/^export /gm, '');
   return vm.runInNewContext(source + '\n({acquireLock,refreshLock,releaseLock,releaseLockEventually})', {
-    ...fs, ...overrides, join, dirname, hostname, randomUUID, process, DOCUMENT_DEFAULTS, loadProjectConfig, replaceFileSync,retryWindowsFileOperation,
+    ...fs, ...overrides, join, dirname, hostname, randomUUID, process, LEGACY_DOCUMENT_DEFAULTS, loadProjectConfig, replaceFileSync,retryWindowsFileOperation,
   }, { filename: 'loop-lock-interleaving-fixture.mjs' });
 }
 test('an unreadable living-owner lock cannot be treated as free and overwritten',async()=>{
@@ -51,6 +51,49 @@ function marker(dir, name, pid) {
   const file = join(guard, name);
   fs.writeFileSync(file, JSON.stringify({ host: hostname(), pid }));
   return { guard, file };
+}
+
+for (const code of ['EPERM', 'EBUSY']) {
+  test(`mutation cleanup retries a transient Windows ${code} after removing its owner marker`, { skip: process.platform !== 'win32' }, async () => {
+    const dir = fs.mkdtempSync(join(tmpdir(), 'lock-cleanup-'));
+    const guard = lockPath(dir) + '.guard';
+    let removals = 0;
+    try {
+      const scheduled = scheduledLock({ rmdirSync(directory) {
+        if (directory === guard) {
+          assert.deepEqual(fs.readdirSync(guard), [], 'only the released empty mutex may be retried');
+          if (removals++ === 0) throw Object.assign(new Error('brief directory probe'), { code });
+        }
+        return fs.rmdirSync(directory);
+      } });
+      assert.equal(scheduled.acquireLock({ projectDir: dir }).acquired, true);
+      assert.equal(removals, 2);
+      assert.equal(fs.existsSync(guard), false);
+      assert.equal(readLock(dir).pid, process.pid);
+      assert.equal(releaseLock({ projectDir: dir }), true);
+    } finally { await cleanupTempDir(dir); }
+  });
+
+  test(`a Windows ${code} cleanup retry leaves a replacement live mutex untouched`, { skip: process.platform !== 'win32' }, async () => {
+    const dir = fs.mkdtempSync(join(tmpdir(), 'lock-cleanup-'));
+    const guard = lockPath(dir) + '.guard';
+    const newName = 'owner-22222222-2222-4222-8222-222222222222.json';
+    let removals = 0;
+    try {
+      const scheduled = scheduledLock({ rmdirSync(directory) {
+        if (directory !== guard) return fs.rmdirSync(directory);
+        removals++;
+        assert.equal(removals, 1, 'a retry must recheck directory identity before attempting deletion');
+        fs.renameSync(guard, guard + '.retired');
+        marker(dir, newName, process.pid);
+        throw Object.assign(new Error('directory replaced during a brief probe'), { code });
+      } });
+      assert.equal(scheduled.acquireLock({ projectDir: dir }).acquired, true);
+      assert.equal(removals, 1);
+      assert.deepEqual(fs.readdirSync(guard), [newName]);
+      assert.equal(readLock(dir).pid, process.pid);
+    } finally { await cleanupTempDir(dir); }
+  });
 }
 
 for (const replacementPoint of ['before-unlink', 'after-unlink']) {

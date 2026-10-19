@@ -17,6 +17,13 @@ import { resolveEngineSettings } from '../engine-settings.mjs';
 import { loadEngineSettingsEnvironment } from '../../lib/codex-env.mjs';
 import { publishProjectInstructions } from '../../lib/project-instructions.mjs';
 import { LEGACY_FRAMEWORK_DENY } from '../permissions-policy.mjs';
+import { loadProjectConfig } from '../project-config.mjs';
+
+export function claudeProjectArgs(cwd,env=process.env) {
+  const project=loadProjectConfig({projectDir:cwd,env});
+  return project.installed&&project.config.instructions.claude_settings==='.0-code/claude/settings.json'
+    ?['--settings',join(project.projectDir,project.config.instructions.claude_settings)]:[];
+}
 
 export class ClaudeBackend extends Backend {
   constructor({ env = process.env, envFiles = [] } = {}) {
@@ -32,6 +39,7 @@ export class ClaudeBackend extends Backend {
     if (!prompt) return { ok: false, output: '', error: 'empty prompt' };
     const settings = resolveEngineSettings(this.id, { model, effort, permissionMode, strictMcp, timeoutMs, idleTimeoutMs }, env);
     const args = buildClaudeArgs({ prompt, ...settings, maxBudgetUsd, promptViaStdin }, env);
+    args.push(...claudeProjectArgs(cwd,env));
     const res = await runCliAsync('claude', args,
       { cwd, env, timeoutMs: settings.timeoutMs, idleTimeoutMs: settings.idleTimeoutMs,
         encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
@@ -70,6 +78,8 @@ export class ClaudeBackend extends Backend {
   }
 
   async ensureReady({ cwd = process.cwd() } = {}) {
+    const project=loadProjectConfig({projectDir:cwd});
+    if(project.installed&&project.config.instructions.claude_settings==='.0-code/claude/settings.json')return {restored:[]};
     const file = join(cwd, '.claude', 'settings.json');
     if (!existsSync(file)) return { restored: [] };
     const config = readJsonConfig(file);

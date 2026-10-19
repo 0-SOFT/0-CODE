@@ -28,7 +28,7 @@
 // Ten turns is three to four finished versions at the measured rate of 2–3 turns per version. The
 // alternatives, their scores and the reason arithmetic did not settle it are on disk in the decision
 // record named above — this constant is the conclusion, not the argument.
-import { DOCUMENT_DEFAULTS } from './project-config.mjs';
+import { LEGACY_DOCUMENT_DEFAULTS } from './project-config.mjs';
 
 export const DEFAULT_REVIEW_EVERY = 10;
 
@@ -69,7 +69,7 @@ export function reviewStatus(state) {
 }
 
 // The instruction the agent gets instead of the one it was going to get.
-export function reviewDirective(instruction, status, roadmapPath = DOCUMENT_DEFAULTS.roadmap.path) {
+export function reviewDirective(instruction, status, roadmapPath = LEGACY_DOCUMENT_DEFAULTS.roadmap.path) {
   const since = status && Number.isFinite(status.since) ? status.since : 0;
   const every = status && status.every ? status.every : DEFAULT_REVIEW_EVERY;
   return [

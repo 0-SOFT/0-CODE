@@ -2,7 +2,7 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, rmdirSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { InstallationPlan, applyInstallationPlan, fileSnapshot, hashBytes, recoverInstallation } from './installation-transaction.mjs';
-import { CONFIG_PATH, loadProjectConfig, normalizeProjectConfig, resolveProjectPath } from './project-config.mjs';
+import { CONFIG_PATH, DOCUMENT_ZONE, internalLogDirectories, isDocumentZone, isClaudeInstructionPath, loadProjectConfig, normalizeProjectConfig, resolveProjectPath } from './project-config.mjs';
 import { assembleInstallationBundle, FRAMEWORK_SOURCE } from './installation-bundle.mjs';
 import { scanProject } from './project-inventory.mjs';
 import { serializeYaml, parseYaml } from '../lib/yaml-mini.mjs';
@@ -11,6 +11,9 @@ import { planProjectDelivery } from './project-delivery.mjs';
 import { PROJECT_PLUGIN_PATH, PROJECT_PLUGIN_ENTRY } from './backends/project-opencode-plugin.mjs';
 import { addNativeJsonChanges, stripNativeJsonChanges, stripNativeJsonEntries } from '../lib/native-json.mjs';
 import { retryWindowsFileOperation } from '../lib/replace-file.mjs';
+import { planDocumentRelocation, addDocumentRelocation } from './document-relocation.mjs';
+import { prepareProjectAdoption, validateRetainedFiles, addAdoptionBackups } from './project-adoption.mjs';
+import { isDeepStrictEqual } from 'node:util';
 
 export const RECEIPT_PATH='.0-code/installation.json';
 export const INSTRUCTION_BEGIN='<!-- BEGIN 0-CODE -->';
@@ -18,6 +21,12 @@ export const INSTRUCTION_END='<!-- END 0-CODE -->';
 const body=bytes=>bytes===null?'':bytes.toString('utf8');
 const jsonBytes=value=>Buffer.from(JSON.stringify(value,null,2)+'\n');
 const resolveFile=(root,path)=>resolveProjectPath(root,path,{allowFramework:true});
+export const claudeSettingsPath = config => config.instructions.claude_settings || '.claude/settings.json';
+function requireNoClaudeOwnership(config,receipt,originalFiles=new Map()) {
+  if(config.instructions.claude==='session-hook'&&(receipt?.files.some(entry=>isClaudeInstructionPath(entry.path))||[...originalFiles.keys()].some(isClaudeInstructionPath))) {
+    throw new Error('session-hook never writes CLAUDE.md. First uninstall the previous owned instruction block using project-file mode, then install with the saved config and session-hook mode; cycle documents are preserved.');
+  }
+}
 function readObject(root,path) {
   const bytes=fileSnapshot(root,path).bytes;
   if(bytes===null) return null;
@@ -30,6 +39,7 @@ function treeFiles(root,directory) {
   return readdirSync(dir,{withFileTypes:true}).flatMap(entry=>{
     const path=`${directory}/${entry.name}`,stat=lstatSync(resolveFile(root,path));
     if(stat.isSymbolicLink()) throw new Error(`Installation tree contains a symlink: ${path}`);
+    if(path.toLowerCase()===DOCUMENT_ZONE&&!stat.isDirectory()) throw new Error('Document zone must be a directory');
     return stat.isDirectory()?treeFiles(root,path):[path];
   }).sort((a,b)=>a.localeCompare(b,'en'));
 }
@@ -39,7 +49,7 @@ export function readInstallationReceipt(root) {
   if(receipt.schema_version!==1||!Array.isArray(receipt.files)||!Array.isArray(receipt.directories)) throw new Error('Invalid installation receipt');
   const seen=new Set();
   for(const entry of receipt.files) {
-    if(typeof entry.path!=='string'||seen.has(entry.path)||entry.path===RECEIPT_PATH) throw new Error('Invalid installation ownership entry');
+    if(typeof entry.path!=='string'||seen.has(entry.path)||entry.path===RECEIPT_PATH||isDocumentZone(entry.path)) throw new Error('Invalid installation ownership entry: documents cannot be owned');
     resolveFile(root,entry.path);seen.add(entry.path);
     if(!/^[a-f0-9]{64}$/.test(entry.hash)) throw new Error('Invalid installation ownership hash');
     if(entry.textHashes!==undefined&&(!Array.isArray(entry.textHashes)||entry.textHashes.length>2||entry.textHashes.some(hash=>!/^[a-f0-9]{64}$/.test(hash))
@@ -49,7 +59,11 @@ export function readInstallationReceipt(root) {
       resolveFile(root,entry.backup);
     }
   }
-  for(const directory of receipt.directories) resolveFile(root,directory);
+  for(const directory of receipt.directories) {
+    if(isDocumentZone(directory)) throw new Error('Invalid installation ownership directory: documents cannot be owned');
+    resolveFile(root,directory);
+  }
+  validateRetainedFiles(receipt.retainedFiles || [], receipt.files);
   return receipt;
 }
 
@@ -60,6 +74,17 @@ function appendInstructions(snapshot) {
   return {bytes:Buffer.concat([snapshot.bytes||Buffer.alloc(0),Buffer.from(suffix)]),patch:{type:'suffix',text:suffix}};
 }
 const command=name=>`\"\${CLAUDE_PROJECT_DIR}/.0-code/hooks/run-hook.cmd\" ${name}`;
+export function claudeContextHooks() {
+  return Object.fromEntries(['SessionStart','SubagentStart'].map(event=>[event,
+    [{matcher:'',hooks:[{type:'command',command:command('project-context'),timeout:15}]}]]));
+}
+export function claudeRequiredHooks(config) {
+  return {
+    PreToolUse:[{matcher:'*',hooks:[{type:'command',command:command('safety-guard')}]}],
+    Stop:[{matcher:'',hooks:[...(config.modules.session_logs?[{type:'command',command:command('save-session-log')}]:[]),{type:'command',command:command('ralph-loop-stop')}]}],
+    ...(config.modules.session_logs?{SessionEnd:[{matcher:'',hooks:[{type:'command',command:command('save-session-log')}]}]}:{}),
+  };
+}
 function claudeSettings(original,config,mcpNames=[]) {
   const current=original||{};
   if(typeof current!=='object'||Array.isArray(current)) throw new Error('Project Claude settings must be an object');
@@ -68,16 +93,23 @@ function claudeSettings(original,config,mcpNames=[]) {
   for(const groups of Object.values(hooks)) {
     if(!Array.isArray(groups)||groups.some(group=>!group||!Array.isArray(group.hooks))) throw new Error('Project hook definitions must contain arrays');
   }
-  if((hooks.Stop||[]).length) throw new Error('Existing Stop hooks require an integration decision');
+  const sessionFile = claudeSettingsPath(config) === '.0-code/claude/settings.json';
+  const expected = claudeRequiredHooks(config);
+  const existing = new Set(sessionFile ? Object.keys(expected).filter(event => isDeepStrictEqual(hooks[event],expected[event])) : []);
+  if((hooks.Stop||[]).length&&!existing.has('Stop')) throw new Error('Existing Stop hooks require an integration decision');
   for(const group of hooks.PreToolUse||[]) for(const hook of group.hooks||[]) {
-    if(/safety[-_ ]?guard|arbiter|permissionDecision/i.test(hook.command||'')) throw new Error('Existing PreToolUse guard requires an integration decision');
+    if(/safety[-_ ]?guard|arbiter|permissionDecision/i.test(hook.command||'')&&!existing.has('PreToolUse')) throw new Error('Existing PreToolUse guard requires an integration decision');
   }
   const guard={matcher:'*',hooks:[{type:'command',command:command('safety-guard')}]};
-  hooks.PreToolUse=[...(hooks.PreToolUse||[]),guard];
+  if(!existing.has('PreToolUse')) hooks.PreToolUse=[...(hooks.PreToolUse||[]),guard];
   const stop=[...(config.modules.session_logs?[{type:'command',command:command('save-session-log')}]:[]),
     {type:'command',command:command('ralph-loop-stop')}];
   hooks.Stop=[{matcher:'',hooks:stop}];
-  if(config.modules.session_logs) hooks.SessionEnd=[...(hooks.SessionEnd||[]),{matcher:'',hooks:[{type:'command',command:command('save-session-log')}]}];
+  if(config.modules.session_logs&&!existing.has('SessionEnd')) hooks.SessionEnd=[...(hooks.SessionEnd||[]),{matcher:'',hooks:[{type:'command',command:command('save-session-log')}]}];
+  if(config.instructions.claude==='session-hook') {
+    if(current.disableAllHooks===true) throw new Error('session-hook instructions require Claude hooks to be enabled');
+    for(const [event,groups] of Object.entries(claudeContextHooks())) hooks[event]=[...(hooks[event]||[]),...groups];
+  }
   if((current.permissions?.ask||[]).length) throw new Error('Explicit ask permissions require an integration decision');
   const result={...current,hooks,env:{...current.env,CLAUDE_CODE_STOP_HOOK_BLOCK_CAP:current.env?.CLAUDE_CODE_STOP_HOOK_BLOCK_CAP??String(STOP_HOOK_BLOCK_CAP)},
     permissions:{...current.permissions,defaultMode:current.permissions?.defaultMode||'bypassPermissions'}};
@@ -88,7 +120,7 @@ function claudeSettings(original,config,mcpNames=[]) {
     result.enabledMcpjsonServers=[...new Set([...(current.enabledMcpjsonServers||[]),...mcpNames.filter(name=>!disabled.has(name))])];
   }
   if(config.modules.token_usage) {
-    if(current.statusLine) throw new Error('Existing status line requires a chaining decision');
+    if(current.statusLine&&!(sessionFile&&isDeepStrictEqual(current.statusLine,{type:'command',command:command('usage-statusline')}))) throw new Error('Existing status line requires a chaining decision');
     result.statusLine={type:'command',command:command('usage-statusline')};
   }
   return result;
@@ -107,8 +139,9 @@ export function validateExistingState(bytes) {
   if(state.schema_version!==1||!state.project_name||state.current_version===undefined||state.current_stage===undefined) throw new Error('Existing state-role file is not a machine state');
 }
 export function directoriesFor(root,paths,previous=[]) {
-  const result=new Set(previous);
+  const result=new Set(previous.filter(path=>!isDocumentZone(path)));
   for(const path of paths) {
+    if(isDocumentZone(path)) continue;
     let dir=dirname(resolveFile(root,path));
     while(dir!==root) {
       if(!existsSync(dir)) result.add(relative(root,dir).replaceAll('\\','/'));
@@ -152,57 +185,67 @@ export function originalSnapshot(root,path,previous) {
 }
 function externalTargets(root,config,previous,mcpNames=[],original=path=>originalSnapshot(root,path,previous)) {
   const targets=new Map();
-  for(const path of ['CLAUDE.md','AGENTS.md']) targets.set(path,appendInstructions(original(path)));
+  if(config.engines.includes('claude')&&config.instructions.claude==='project-file') targets.set('CLAUDE.md',appendInstructions(original('CLAUDE.md')));
+  if(config.engines.some(engine=>['codex','opencode'].includes(engine))) targets.set('AGENTS.md',appendInstructions(original('AGENTS.md')));
   if(config.engines.includes('claude')) {
-    const snapshot=original('.claude/settings.json');
+    const settingsPath=claudeSettingsPath(config),snapshot=original(settingsPath);
     let value=null;try {value=snapshot.bytes===null?null:JSON.parse(body(snapshot.bytes));if(snapshot.bytes!==null&&(!value||typeof value!=='object'||Array.isArray(value))) throw new Error();} catch {throw new Error('Invalid project Claude settings');}
     const before=value||{},after=claudeSettings(value,config,mcpNames),values=[],arrays=[];
     for(const [parent,name] of [['env','CLAUDE_CODE_STOP_HOOK_BLOCK_CAP'],['permissions','defaultMode']])
       if(!Object.hasOwn(before[parent]||{},name))values.push({path:[parent,name],value:after[parent][name]});
     if(config.modules.token_usage) {
-      if(Object.hasOwn(before,'statusLine'))throw new Error('Existing status line requires a chaining decision');
-      values.push({path:['statusLine'],value:after.statusLine});
+      if(!Object.hasOwn(before,'statusLine'))values.push({path:['statusLine'],value:after.statusLine});
     }
-    for(const event of ['PreToolUse','Stop','SessionEnd']) {
+    for(const event of ['PreToolUse','Stop','SessionEnd','SessionStart','SubagentStart']) {
       const added=(after.hooks[event]||[]).slice((before.hooks?.[event]||[]).length);
       if(added.length)arrays.push({path:['hooks',event],values:added});
     }
     const addedMcp=(after.enabledMcpjsonServers||[]).filter(name=>!(before.enabledMcpjsonServers||[]).includes(name));
     if(addedMcp.length)arrays.push({path:['enabledMcpjsonServers'],values:addedMcp});
-    targets.set('.claude/settings.json',addNativeJsonChanges(snapshot.bytes,{values,arrays}));
+    targets.set(settingsPath,addNativeJsonChanges(snapshot.bytes,{values,arrays}));
   }
   if(config.engines.includes('opencode')) targets.set(PROJECT_PLUGIN_PATH,{bytes:Buffer.from(PROJECT_PLUGIN_ENTRY)});
   return targets;
 }
 export function requireOwnership(root,receipt) {
+  if([...receipt.files.map(entry=>entry.path),...receipt.directories].some(isDocumentZone)) throw new Error('Invalid installation ownership: documents cannot be owned');
   for(const entry of receipt.files) {
     if(entry.path===CONFIG_PATH) continue; // The project owns this mutable preference file.
     const current=fileSnapshot(root,entry.path);
     if(current.hash!==entry.hash) {
-      if(entry.patch&&!entry.path.startsWith('.0-code/'))stripOwnedPatch(current,entry);
+      if(entry.patch&&(!entry.path.startsWith('.0-code/')||entry.path==='.0-code/claude/settings.json'))stripOwnedPatch(current,entry);
       else if(entry.path.startsWith('.0-code/')||!entry.textHashes?.includes(current.hash))throw new Error(`Installed file changed outside upgrade: ${entry.path}`);
     }
   }
-  const owned=new Set([...receipt.files.map(entry=>entry.path),RECEIPT_PATH]);
-  for(const path of treeFiles(root,'.0-code')) if(!path.startsWith('.0-code/run/')&&!owned.has(path)) throw new Error(`Unowned file inside installation: ${path}`);
+  validateRetainedFiles(receipt.retainedFiles || [],receipt.files);
+  const owned=new Set([...receipt.files.map(entry=>entry.path),...(receipt.retainedFiles||[]),RECEIPT_PATH]);
+  for(const path of treeFiles(root,'.0-code')) if(!/^\.0-code\/run\//i.test(path)&&!isDocumentZone(path)&&!owned.has(path)) throw new Error(`Unowned file inside installation: ${path}`);
 }
 
-export function planProjectInstallation(root,{config,source=FRAMEWORK_SOURCE,upgrade=false,originalFiles=new Map(),inventory}={}) {
+export function planProjectInstallation(root,{config,source=FRAMEWORK_SOURCE,upgrade=false,originalFiles=new Map(),inventory,documentManifest,documentConfig,adoptionManifest}={}) {
   root=resolve(root);
   if(root===resolve(source)) throw new Error('Install into a target project, not the framework source directory');
-  const receipt=readInstallationReceipt(root);
+  const installedReceipt=readInstallationReceipt(root);
+  if(adoptionManifest&&installedReceipt)throw new Error('Adoption requires an installation without a receipt');
+  if(adoptionManifest&&documentManifest)throw new Error('Adoption and document relocation require separate plans');
+  const adoption=adoptionManifest?prepareProjectAdoption(root,adoptionManifest,normalizeProjectConfig(config)):null;
+  const receipt=installedReceipt??adoption?.receipt;
   if(receipt&&originalFiles.size)throw new Error('Legacy original bytes apply only to a fresh migration');
   if(upgrade&&!receipt) throw new Error('No owned installation to upgrade');
-  if(receipt&&!upgrade) return planProjectInstallation(root,{config,source,upgrade:true});
+  if(receipt&&!upgrade) return planProjectInstallation(root,{config,source,upgrade:true,documentManifest});
+  if(documentManifest!==undefined && !receipt && !documentConfig) throw new Error('Document relocation requires an existing installation; use migrate');
   if(receipt) requireOwnership(root,receipt);
   else if(existsSync(join(root,'.0-code'))) {
-    const foreign=treeFiles(root,'.0-code').filter(path=>path!==CONFIG_PATH&&!path.startsWith('.0-code/run/'));
+    const foreign=treeFiles(root,'.0-code').filter(path=>path!==CONFIG_PATH&&!path.startsWith('.0-code/run/')&&!isDocumentZone(path));
     if(foreign.length) throw new Error('Existing .0-code files have no installation ownership receipt');
   }
   const existing=receipt?loadProjectConfig({projectDir:root}).config:null;
   const scan=receipt?null:scanProject(root,{allowMissing:true});
   const proposed=config!==undefined?config:existing??scan.suggestedConfig;
-  const settings=normalizeProjectConfig(proposed);
+  const normalized=normalizeProjectConfig(proposed,{documentDefaults:existing?.documents});
+  const relocation=documentManifest!==undefined ? planDocumentRelocation(root,existing??documentConfig,normalized,documentManifest) : null;
+  const settings=relocation?.config??normalized;
+  requireNoClaudeOwnership(settings,receipt,originalFiles);
   settings.inventory=inventory??(receipt?(config?.inventory??existing.inventory):scan.inventory);
   const original=path=>originalFiles.has(path)?{bytes:originalFiles.get(path),hash:hashBytes(originalFiles.get(path)),mode:originalFiles.get(path)===null?null:fileSnapshot(root,path).mode}:originalSnapshot(root,path,receipt);
   if(receipt) {
@@ -221,14 +264,23 @@ export function planProjectInstallation(root,{config,source=FRAMEWORK_SOURCE,upg
     for(const tool of originals) if(!settings.inventory.tools.some(entry=>entry.id===tool.id)) settings.inventory.tools.push(tool);
     settings.inventory.tools.sort((a,b)=>a.id.localeCompare(b.id,'en'));
   }
+  if(relocation && settings.inventory.documents) {
+    const movedPaths=new Map(relocation.moves.map(entry=>[entry.from,entry.to]));
+    settings.inventory={...settings.inventory,documents:settings.inventory.documents.map(entry=>
+      ({...entry,path:movedPaths.get(entry.path)??entry.path}))};
+  }
   const bundle=assembleInstallationBundle(settings,{source});
   settings.framework_version=bundle.version;
   const project=loadProjectConfig({projectDir:root,config:settings});
   const native=planProjectDelivery(root,settings,bundle,{original:path=>original(path).bytes});
+  if(settings.instructions.project_rules?.length) {
+    for(const path of settings.instructions.project_rules) if(fileSnapshot(root,path).bytes===null)throw new Error('Configured project rules are missing: '+path);
+    bundle.files.set('AGENT.md',Buffer.concat([bundle.files.get('AGENT.md'),Buffer.from('\n## Retained project rules\n\nRead these project-owned files; this generated guide defines current framework behavior:\n'+settings.instructions.project_rules.map(path=>'- '+JSON.stringify(path)).join('\n')+'\n')]));
+  }
   if(native.references.length) bundle.files.set('AGENT.md',Buffer.concat([bundle.files.get('AGENT.md'),
     Buffer.from('\n## Project rules\n\nRead the applicable project rules first:\n'+native.references.map(path=>'- '+JSON.stringify(path)).join('\n')+'\n')]));
   const targets=new Map([...bundle.files].map(([path,bytes])=>['.0-code/'+path,{bytes,
-    mode:/^hooks\/(?:run-hook\.cmd|ralph-loop-stop|safety-guard|save-session-log|usage-statusline)$/.test(path)?0o755:0o644}]));
+    mode:/^hooks\/(?:run-hook\.cmd|ralph-loop-stop|safety-guard|save-session-log|usage-statusline|project-context)$/.test(path)?0o755:0o644}]));
   targets.set(CONFIG_PATH,{bytes:jsonBytes(settings)});
   const approvedMcp=native.delivery.tools.filter(tool=>tool.kind==='mcp'&&tool.engine==='claude'
     &&(tool.status==='delivered'||tool.status==='native'&&tool.compatible)).map(tool=>tool.name);
@@ -240,12 +292,13 @@ export function planProjectInstallation(root,{config,source=FRAMEWORK_SOURCE,upg
   }
   const plan=new InstallationPlan(root),entries=[];
   for(const [path,target] of targets) {
+    if(isDocumentZone(path)) throw new Error('Framework delivery cannot own project documents');
     const previous=receipt?.files.find(entry=>entry.path===path),snapshot=fileSnapshot(root,path);
     const inside=path.startsWith('.0-code/');
-    const overwrite=Boolean(previous)||path===CONFIG_PATH||target.patch?.type==='native-json'||(!inside&&(path==='CLAUDE.md'||path==='AGENTS.md'||path==='.claude/settings.json'||path==='.codex/config.toml'));
+    const overwrite=Boolean(previous)||path===CONFIG_PATH||path===claudeSettingsPath(settings)||target.patch?.type==='native-json'||(!inside&&(path==='CLAUDE.md'||path==='AGENTS.md'||path==='.claude/settings.json'||path==='.codex/config.toml'));
     plan.change(path,target.bytes,{overwrite,expectedHash:previous&&path!==CONFIG_PATH?snapshot.hash:undefined,
       ...(target.mode!==undefined?{mode:target.mode,preserveMode:false}:{})});
-    const before=!inside&&(previous?.patch||originalFiles.has(path))?original(path):null;
+    const before=target.patch||!inside&&(previous?.patch||originalFiles.has(path))?original(path):null;
     let entry={path,hash:hashBytes(target.bytes),originalHash:before?before.hash:previous?previous.originalHash:(inside?null:snapshot.hash),
       originalMode:before?before.mode:previous?previous.originalMode:snapshot.mode};
     if(target.patch) entry.patch=target.patch;
@@ -266,16 +319,39 @@ export function planProjectInstallation(root,{config,source=FRAMEWORK_SOURCE,upg
     const original=originalSnapshot(root,old.path,receipt);
     plan.change(old.path,original.bytes,{overwrite:true,expectedHash:fileSnapshot(root,old.path).hash});
   }
+  // A legacy block still needs proven removal when its engine is no longer selected.
+  for(const [path,bytes] of originalFiles) if(!targets.has(path)) {
+    plan.change(path,bytes,{overwrite:true,expectedHash:fileSnapshot(root,path).hash});
+  }
   for(const role of ['state','roadmap']) {
     const path=project.documentRelative(role),snapshot=fileSnapshot(root,path);
+    if(relocation?.moves.some(move=>move.to===path)) continue;
     if(snapshot.bytes!==null) { if(role==='state') validateExistingState(snapshot.bytes);continue; }
     plan.change(path,role==='state'?stateBytes(basename(root),bundle.version):Buffer.from('# Project roadmap\n\nRecord the authorized cycle plan and acceptance evidence here.\n'));
   }
+  // These are project files, deliberately absent from the receipt and preserved on uninstall.
+  // Keep existing owner ignore policies byte-for-byte; only seed missing log protections.
+  if(existsSync(resolveFile(root,DOCUMENT_ZONE))||Object.values(settings.documents).some(document=>isDocumentZone(document.path))) {
+    for(const directory of internalLogDirectories(settings)) {
+      const path=directory+'/.gitignore';
+      if(fileSnapshot(root,path).bytes===null&&!relocation?.moves.some(move=>move.to===path)) plan.change(path,Buffer.from('*\n'));
+    }
+  }
+  const retainedFiles=(receipt?.retainedFiles||[]).filter(path=>!targets.has(path));
+  validateRetainedFiles(retainedFiles,entries);
   const nextReceipt={schema_version:1,framework_version:bundle.version,delivery:native.delivery,files:entries,
+    ...(retainedFiles.length?{retainedFiles}:{}),
     directories:directoriesFor(root,[...targets.keys()],receipt?.directories),...(receipt?.migration?{migration:receipt.migration}:{})};
   plan.change(RECEIPT_PATH,jsonBytes(nextReceipt),{overwrite:Boolean(receipt)});
+  let adoptionBackups;
+  if(adoption) {
+    adoptionBackups=addAdoptionBackups(plan,adoption);
+    plan.preflight=adoption.preflight;plan.enterGuard=adoption.enterGuard;plan.cycleLockPaths=adoption.cycleLockPaths;
+  }
+  const documentMigration=relocation?addDocumentRelocation(plan,relocation):null;
+  if(settings.instructions.claude==='session-hook'&&plan.changes.some(entry=>isClaudeInstructionPath(entry.path))) throw new Error('session-hook cannot change CLAUDE.md');
   plan.assertReady();
-  return {root,config:settings,plan,receipt:nextReceipt,bundle};
+  return {root,config:settings,plan,receipt:nextReceipt,bundle,...(adoption?{adoption:{backups:adoptionBackups,retainedFiles}}:{}),...(documentMigration?{documentMigration}:{})};
 }
 
 export function installProject(root,options={}) {
@@ -290,6 +366,7 @@ export function upgradeProject(root,options={}) {
 export function planProjectUninstall(root) {
   root=resolve(root);const receipt=readInstallationReceipt(root);
   if(!receipt) throw new Error('No owned installation to remove');
+  requireNoClaudeOwnership(loadProjectConfig({projectDir:root}).config,receipt);
   requireOwnership(root,receipt);
   const plan=new InstallationPlan(root);
   for(const entry of [...receipt.files].reverse()) {
@@ -312,6 +389,7 @@ export function uninstallProject(root) {
     catch(error) {if(!['ENOENT','ENOTEMPTY','EEXIST'].includes(error.code)) throw error;}
   }
   function prune(path) {
+    if(isDocumentZone(path)) return;
     const directory=resolveFile(prepared.root,path);if(!existsSync(directory)) return;
     for(const entry of readdirSync(directory,{withFileTypes:true})) if(entry.isDirectory()) prune(`${path}/${entry.name}`);
     removeEmptyDirectory(path);

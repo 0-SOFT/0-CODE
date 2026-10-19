@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DOCUMENT_DEFAULTS, findProjectRoot, frameworkVersion, loadProjectConfig,
+import { DOCUMENT_DEFAULTS, LEGACY_DOCUMENT_DEFAULTS, findProjectRoot, frameworkVersion, loadProjectConfig,
   normalizeProjectConfig, projectRelativePath, resolveProjectPath } from '../../core/project-config.mjs';
 import { cleanupTempDir } from '../helpers/index.mjs';
 
@@ -62,6 +62,48 @@ test('partial overrides preserve remaining defaults and never mutate caller data
   assert.equal(config.modules.telegram,true);
   assert.equal(config.toolset.scope,'project');
   assert.deepEqual(config.toolset.enable,[]);
+});
+
+test('new configuration defaults all nine roles inside docs and preserves explicit external roles', t => {
+  const fresh=normalizeProjectConfig();
+  assert.equal(Object.keys(fresh.documents).length,9);
+  for(const [role,document] of Object.entries(LEGACY_DOCUMENT_DEFAULTS))
+    assert.deepEqual(fresh.documents[role],{...document,path:'.0-code/'+document.path});
+  const root=project(t,{documents:LEGACY_DOCUMENT_DEFAULTS});
+  assert.deepEqual(loadProjectConfig({projectDir:root}).config.documents,LEGACY_DOCUMENT_DEFAULTS);
+  const mixed=loadProjectConfig({projectDir:root,config:{documents:{state:{path:'work/STATE.md'}}}});
+  assert.equal(mixed.documentRelative('state'),'work/STATE.md');
+  assert.equal(mixed.documentRelative('prompts'),'.0-code/docs/prompts');
+});
+
+test('internal roles resolve only in the document zone while general asset paths stay strict', t => {
+  const documents = DOCUMENT_DEFAULTS;
+  const root = project(t, {documents});
+  const loaded = loadProjectConfig({projectDir: root});
+  for (const [role, document] of Object.entries(documents)) {
+    assert.equal(loaded.documentRelative(role), document.path);
+  }
+  assert.equal(loaded.documentRelative('decisions', {version:'2.1.0',name:'zone'}), '.0-code/docs/decisions/2.1.0_zone.md');
+  assert.equal(loaded.runtimePath('.loop.lock'), join(root,'.0-code/run/.loop.lock'));
+  assert.throws(() => projectRelativePath('.0-code/docs/tool.mjs'), /outside framework/);
+  assert.equal(loaded.templatePath('cycle'), join(root,'.0-code/templates/cycle.md'));
+  mkdirSync(join(root,'.0-code/docs/prompts/templates'), {recursive:true});
+  writeFileSync(join(root,'.0-code/docs/prompts/templates/cycle.md'), 'owner template');
+  assert.equal(loaded.templatePath('cycle'), join(root,'.0-code/docs/prompts/templates/cycle.md'));
+  assert.equal(loadProjectConfig({projectDir:root,config:{documents:{reports:{path:'.0-code/docs'}}}}).documentPath('reports'), join(root,'.0-code/docs'));
+});
+
+test('document zone boundaries protect code, runtime and durable files from log exclusions', () => {
+  for (const path of ['.0-code', '.0-code/core/state.md', '.0-code/run/state.md', '.0-code/installation.json', '.0-code/docs-old/state.md', '.0-code/DOCS/../core/state.md', '.0-code/docs']) {
+    assert.throws(() => normalizeProjectConfig({documents:{state:{path}}}), path);
+  }
+  for (const documents of [
+    {logs:{path:'.0-code/docs'}},
+    {logs:{path:'.0-code/docs/records'}, reports:{path:'.0-code/docs/records/reports'}},
+    {state:{path:'.0-code/docs/logs/STATE.md'}},
+    {logs:{path:'.0-code/docs/records'}, roadmap:{path:'.0-code/docs/records/ROADMAP.md'}},
+  ]) assert.throws(() => normalizeProjectConfig({documents}), /logs/);
+  assert.equal(normalizeProjectConfig({documents:{state:{path:'.0-CODE\\DOCS\\STATE.md'}}}).documents.state.path, '.0-CODE/DOCS/STATE.md');
 });
 
 test('schema rejects malformed configuration and unknown fields before any write', t => {

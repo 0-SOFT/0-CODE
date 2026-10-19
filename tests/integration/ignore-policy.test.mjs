@@ -113,6 +113,22 @@ test('ignore policy: config/.env is ignored and absent from the index', () => {
   assert.ok(!isTracked(ROOT, 'config/.env'), 'config/.env is tracked — it holds live secrets');
 });
 
+test('ignore policy: both trees hide historical runtime and logs as well as the internal zone',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'ignore-documents-'));
+  try {
+    assert.equal(spawnSync('git',['init','-q'],{cwd:dir}).status,0);
+    copyFileSync(join(ROOT,'templates/gitignore.public'),join(dir,'.gitignore'));
+    const paths=['docs/logs/session.jsonl','docs/.loop.lock','docs/.loop.lock.guard/owner.json',
+      'docs/.loop-children','docs/.loop-progress','docs/STATE.md.bak.1',
+      '.0-code/docs/logs/session.jsonl','.0-code/run/.loop.lock','.0-code/run/STATE.md.bak.1'];
+    for(const root of [ROOT,dir]) {
+      for(const path of paths) assert.equal(ruleCovers(root,path),true,path);
+      for(const path of ['docs/product.md','.0-code/docs/STATE.md','.0-code/docs/reports/proof.md'])
+        assert.equal(ruleCovers(root,path),false,path);
+    }
+  } finally {await cleanupTempDir(dir);}
+});
+
 // The sanitisation gate moved to tests/{unit,integration}/secret-scan.test.mjs in v1.7.1: once
 // lib/secret-scan.mjs gave the rule a callable home, the claim could be asserted directly instead
 // of by running the whole 40-second smoke suite from inside the test suite. Both directions are

@@ -101,7 +101,7 @@ test('blind spot: a new project is not handed a limit nobody chose', () => {
   const root=mkdtempSync(join(base,'no-default-cap-'));
   try {
     installProject(root,{config:{modules:Object.fromEntries(Object.keys(PROJECT_MODULES).map(id=>[id,false]))}});
-    const state=readFrontmatter(join(root,'docs/STATE.md'));
+    const state=readFrontmatter(join(root,'.0-code/docs/STATE.md'));
     assert.equal(Number(state.max_iterations||0)>0,false);
     assert.equal(state.budget_metrics.cap_usd,null);
   } finally { cleanupTempDirSync(root); }

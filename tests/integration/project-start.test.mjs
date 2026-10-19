@@ -18,7 +18,7 @@ function fixture(t,installed=true) {
   const prompt=join(root,'owner.md');writeFileSync(prompt,'---\nversion: "2.1.0"\nstage: 2\n---\n# Work\n');return {root,prompt};
 }
 test('real source start API previews without writes, binds state with the shared stamp and refuses active replacement',t=>{
-  const {root,prompt}=fixture(t),state=join(root,'docs/STATE.md'),before=readFileSync(state);
+  const {root,prompt}=fixture(t),state=join(root,'.0-code/docs/STATE.md'),before=readFileSync(state);
   const plan=planProjectStart(root,prompt,{maxIterations:2});assert.deepEqual(readFileSync(state),before);
   assert.equal(plan.drivers[0].engine,'claude');
   const applied=startProjectCycle(root,prompt,{maxIterations:2});assert.ok(applied.result.changed>0);
@@ -31,7 +31,7 @@ test('real source start API previews without writes, binds state with the shared
 });
 test('invalid inputs and edits after planning preserve the existing state',t=>{
   const absent=fixture(t,false);assert.throws(()=>planProjectStart(absent.root,absent.prompt),/Install/);
-  const {root,prompt}=fixture(t),state=join(root,'docs/STATE.md'),before=readFileSync(state);
+  const {root,prompt}=fixture(t),state=join(root,'.0-code/docs/STATE.md'),before=readFileSync(state);
   for(const limit of [0,-1,1.5,NaN]) assert.throws(()=>planProjectStart(root,prompt,{maxIterations:limit}),/positive/);
   for(const text of ['# No header','---\nversion: "x"\nstage: 2\n---\n','---\nversion: "2.1.0"\nstage: 7\n---\n']) {
     writeFileSync(prompt,text);assert.throws(()=>planProjectStart(root,prompt),/frontmatter|version|stage/);assert.deepEqual(readFileSync(state),before);

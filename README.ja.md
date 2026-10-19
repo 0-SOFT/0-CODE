@@ -1,8 +1,8 @@
-<!-- tracks: README.md sha256:3861ef6052d0 -->
+<!-- tracks: README.md sha256:6be15af01675 -->
 
 # 0-CODE
 
-**バージョン:** v2.0.4
+**バージョン:** v2.1.0
 
 既存プロジェクトに組み込む **Claude Code、Codex、OpenCode** 向けの自律開発サイクルです。ひとつのサイクル指示に調査、実装、修正、監査、リリース作業を含められます。
 
@@ -25,6 +25,18 @@
 [公開カタログ](toolset/CATALOG.md)には **五つの標準 MCP：context7、playwright、chrome-devtools、sequential-thinking、memory** が含まれます。npm パッケージは検証済みの SemVer 最低バージョン以上で、名前とエントリーポイントが正しい必要があります。条件を満たす新しいバージョンは保持します。外部 API キーは不要ですが、ブラウザツールには利用可能なブラウザも必要です。登録や doctor の成功だけでは実際の接続を証明しません。非公開のスキル、エージェント、コマンド、ルールの実装ファイルは除外されています。MCP マニフェストの任意のアカウントサービス例は、明示的に設定し認証するまで無効です。
 
 既定は**ユーザーごとに独立した一つのインストール**で、そのユーザーのプロジェクト間で共有します。同じ選択を再インストールしても変更しません。project スコープで別の選択をプロジェクトに固定できます。プロジェクトの削除ではマシンのツールを残し、`uninstall-tools` で別途削除して元のネイティブ設定を復元します。認証はコピーしません。[設定と前提条件](docs/PROJECT_SETTINGS.md)。
+
+## 2.1.0 の文書、移行、所有権
+
+新規インストールでは九つの文書ロールを `.0-code/docs/` に置きます。`STATE.md`、`ROADMAP.md`、`reports/`、`decisions/`、`todo/`、`logs/`、`prompts/`、`prompts/templates/`、`userdocs/` です。永続文書は Git に保存し、セッションログは除外します。ログには `.0-code/run/logs/` も使えますが、永続ロールには実行時領域を使えません。明示的な外部ロールは引き続き有効で、通常の upgrade は既存のパスを保持します。文書は所有権レシートの対象外です。doctor は受け入れ、upgrade は保持し、uninstall は文書とディレクトリを残して実行時ファイルとバックアップを削除します。
+
+2.0.x の標準 `docs/*` ロールを移すには、`upgrade --relocate-documents <files.json>` または `migrate --relocate-documents <files.json>` を明示的に使い、最初に `--dry-run` で確認します。正確なファイル一覧を確認してください。未指定の製品文書は残ります。設定、STATE の参照、選択したテンプレートが更新され、変更前のバイト列は保存されます。独自の外部パスは変わりません。移動や受け入れ前にサイクルを完了し、バックグラウンド処理の結果を回収してドライバーを停止します。生きたロックや入力の変更は拒否されます。移動をまとめて Git に登録すると名前変更を検出できます。
+
+レシートのない改変済み `.0-code/` は、確認済み SHA-256 と `replace`/`preserve` を記した `migrate --adopt-manifest <manifest.json>` で受け入れます。保持できるのは正確に列挙した `bin/`、`claude/`、`.0-code/README.md` のプロジェクト拡張のみで、コードは置換して保存します。拡張は編集でき、upgrade/uninstall 後も残ります。不明なファイルやハッシュ不一致は拒否され、受け入れと文書移動は別操作です。生成ガイドの置換前に独自の AGENT ルールを文書に保存し、`instructions.project_rules` で参照します。
+
+Claude は `instructions.claude: session-hook` で `CLAUDE.md` に書き込まずに動作できます。`instructions.claude_settings: .0-code/claude/settings.json` を指定するとセッション設定を使え、ランチャー、MCP、system-prompt を保持できます。`claude --settings .0-code/claude/settings.json` で起動してください。通常のセッションは自動で読み込みません。互換設定はポリシーを保持し、外部の Stop/guard フックは検討が必要です。Uninstall は元の設定に戻します。Doctor はローカルフックを検証しますが、ユーザー・managed・CLI の上書きは評価しません。[形式、コマンド、制限](docs/PROJECT_SETTINGS.md)。
+
+2.1.0 の開発時の受け入れ検証は Windows と Node 24 で実施しました。Linux、macOS、Node 20/22 は対象外で、CI マトリクスの設定だけでは実行の証拠になりません。ファイルシステムとカバレッジの制限は[検証範囲](docs/PROJECT_SETTINGS.md#validation-scope)を参照してください。
 
 ## 作業と保守
 

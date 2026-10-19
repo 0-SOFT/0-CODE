@@ -1,6 +1,6 @@
 # 0-CODE
 
-**Version:** v2.0.4
+**Version:** v2.1.0
 
 An autonomous development cycle for **Claude Code, Codex and OpenCode**, integrated into an existing project. One cycle prompt can contain research, implementation, repairs, audits and release work.
 
@@ -14,7 +14,7 @@ The agent scans project documents, tools, MCP and check commands, resolves genui
 
 ## What is installed
 
-Framework code, configuration, schemas, modules and templates live in **`.0-code/`**. Engines receive only their required native hooks, instructions, compatible tool entries and the OpenCode guard plugin. Existing code and documents are preserved; collisions and changed owned files are reported before writes. Runtime files and backups live in ignored `.0-code/run/`.
+Framework code, configuration, schemas, modules and built-in templates live in **`.0-code/`**. Project-owned cycle documents live in **`.0-code/docs/`**; runtime files and backups live in ignored **`.0-code/run/`**. Engines receive their required native hooks, instructions, compatible tool entries and the OpenCode guard plugin. Existing code and documents are preserved; collisions and changed owned files are reported before writes.
 
 The single configuration reference is [PROJECT_SETTINGS](docs/PROJECT_SETTINGS.md). Choose default documents, override individual roles, or map all roles to existing project conventions. The state remains a machine-readable document. Human documents use the configured language; agent instructions stay in English.
 
@@ -23,6 +23,18 @@ Model, reasoning effort and login belong to the owner. Settings resolve as **exp
 The [public tool catalog](toolset/CATALOG.md) contains **five default MCP servers: context7, playwright, chrome-devtools, sequential-thinking and memory**. They need npm packages at or above the tested SemVer minimum, with the correct package name and entry point; preserve valid newer packages. They require no external API key; browser tools also need an available browser. Registration and a green doctor do not prove a live connection. Private skill, agent, command and rule bodies are excluded. Optional account examples in the MCP manifest stay off until explicitly configured and authorized.
 
 Tools default to **one independent installation per user**, shared across that user's projects. Reinstalling the same selection changes nothing. Use project scope to pin a different selection in a project. Project uninstall leaves machine tools; `uninstall-tools` removes the separately owned machine installation and restores its original native settings. Authentication is never copied. See [configuration and prerequisites](docs/PROJECT_SETTINGS.md).
+
+## Documents, migration and ownership in 2.1.0
+
+New installations place all nine document roles under `.0-code/docs/`: `STATE.md`, `ROADMAP.md`, `reports/`, `decisions/`, `todo/`, `logs/`, `prompts/`, `prompts/templates/` and `userdocs/`. Durable documents belong in Git; session logs are ignored. Logs may instead use `.0-code/run/logs/`; permanent roles cannot use runtime. Explicit external roles remain supported, and ordinary upgrade preserves existing paths. Documents are outside the ownership receipt: doctor accepts them, upgrade preserves them, and uninstall keeps them and their directories while removing runtime and backups.
+
+Relocate standard 2.0.x `docs/*` roles explicitly with `upgrade --relocate-documents <files.json>` or `migrate --relocate-documents <files.json>`, first with `--dry-run`. Review the exact file list; unlisted product documentation stays in place. Configured paths, STATE pointers and selected templates are updated, with original changed bytes archived. Custom external paths stay unchanged. Finish the cycle, collect background jobs and stop the driver before relocation or adoption; a live lock or changed input refuses the plan. Stage the resulting moves in Git to retain rename history.
+
+A customized `.0-code/` installation without a receipt uses `migrate --adopt-manifest <manifest.json>` with reviewed SHA-256 hashes and `replace`/`preserve` actions. Only exact listed project extensions under `bin/`, `claude/` and `.0-code/README.md` may be retained; framework code is replaced and archived. Preserved extensions remain editable and survive upgrade/uninstall. Unknown files or hash mismatches refuse; adoption and relocation are separate operations. Keep custom AGENT rules as a document and reference it through `instructions.project_rules` before replacing the generated guide.
+
+Claude can use `instructions.claude: session-hook` without writing `CLAUDE.md`. Set `instructions.claude_settings: .0-code/claude/settings.json` for a session overlay, preserving launcher, MCP and system-prompt files. Launch with `claude --settings .0-code/claude/settings.json`; ordinary Claude sessions do not load that overlay automatically. Compatible settings keep their policies; foreign Stop/guard hooks require review. Uninstall restores original settings. Doctor verifies local hooks, not user/managed/CLI overrides. See [formats, commands and limits](docs/PROJECT_SETTINGS.md).
+
+Development acceptance for 2.1.0 used Windows and Node 24. It did not cover Linux, macOS or Node 20/22; a configured CI matrix is not evidence of execution. See [validation scope](docs/PROJECT_SETTINGS.md#validation-scope) for filesystem and coverage limits.
 
 ## Work and maintain
 

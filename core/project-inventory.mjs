@@ -3,7 +3,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { basename, dirname, join, relative, resolve } from 'node:path';
-import { loadProjectConfig, normalizeProjectConfig, resolveProjectPath } from './project-config.mjs';
+import { DOCUMENT_DEFAULTS, loadProjectConfig, normalizeProjectConfig, resolveProjectPath } from './project-config.mjs';
 import { parseYaml } from '../lib/yaml-mini.mjs';
 import { parseJsonc } from '../lib/jsonc.mjs';
 import { parseToml } from '../lib/toml-mini.mjs';
@@ -257,7 +257,8 @@ export function scanProject(projectDir = process.cwd(), { allowMissing = false }
   const inventory={schema_version:1,tools,checks,documents,language,legacy,warnings,
     scope:selected?'git-files-and-engine-metadata':'filesystem-with-build-artifacts-excluded',
     installation:{detected:project.installed,...(project.installed?{framework_version:project.config.framework_version}:{})}};
-  const suggestedConfig=normalizeProjectConfig({...project.config,engines:project.providedKeys.includes('engines')?project.config.engines:detected.size?[...detected].sort(order):['claude'],
+  const suggestedDocuments=project.installed||legacy.detected?project.config.documents:DOCUMENT_DEFAULTS;
+  const suggestedConfig=normalizeProjectConfig({...project.config,documents:suggestedDocuments,engines:project.providedKeys.includes('engines')?project.config.engines:detected.size?[...detected].sort(order):['claude'],
     language:project.providedKeys.includes('language')?project.config.language:language.language,inventory});
   const conflicts=tools.filter(tool=>tool.kind==='hooks' && (tool.event==='Stop' || tool.guardLike)).map(tool=>({path:tool.path,name:tool.name,reason:'Existing loop driver or guard requires an explicit integration decision'}));
   return {projectDir,inventory,suggestedConfig,conflicts};

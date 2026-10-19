@@ -6,7 +6,7 @@ import { FRAMEWORK_SOURCE } from './installation-bundle.mjs';
 import { planProjectInstallation, readInstallationReceipt, RECEIPT_PATH } from './project-installation.mjs';
 import { scanProject } from './project-inventory.mjs';
 import { readNativeJson, nativeEntryHash, removeNativeArrayValues, removeNativeObjectValue } from '../lib/native-json.mjs';
-import { DOCUMENT_DEFAULTS } from './project-config.mjs';
+import { LEGACY_DOCUMENT_DEFAULTS, normalizeProjectConfig } from './project-config.mjs';
 import { isPidAlive, ownerState } from './loop-lock.mjs';
 const BEGIN='<!-- BEGIN AUTONOMOUS FRAMEWORK -->',END='<!-- END AUTONOMOUS FRAMEWORK -->';
 const json=value=>Buffer.from(JSON.stringify(value,null,2)+'\n');
@@ -66,11 +66,17 @@ function copyPreparedPlan(prepared,receipt) {
   for(const entry of prepared.plan.changes)if(entry.path!==RECEIPT_PATH)plan.change(entry.path,entry.after,{overwrite:true,expectedHash:entry.beforeHash,mode:entry.mode,preserveMode:false});
   plan.change(RECEIPT_PATH,json(receipt),{overwrite:true});return plan;
 }
-export function planProjectMigration(root,{source=FRAMEWORK_SOURCE,config}={}) {
+export function planProjectMigration(root,{source=FRAMEWORK_SOURCE,config,documentManifest,adoptionManifest}={}) {
   root=resolve(root);const previous=readInstallationReceipt(root);
   if(previous) {
-    if(!previous.migration)throw new Error('Project already uses the new installation; use upgrade');
-    return planProjectInstallation(root,{source,config,upgrade:true});
+    if(adoptionManifest&&previous.migration?.manifestHash!==hashBytes(Buffer.from(JSON.stringify(adoptionManifest))))throw new Error('Adoption manifest differs from the completed migration');
+    if(!previous.migration&&!documentManifest)throw new Error('Project already uses the new installation; use upgrade');
+    return planProjectInstallation(root,{source,config,upgrade:true,documentManifest});
+  }
+  if(adoptionManifest!==undefined) {
+    const existing=JSON.parse(readFileSync(join(root,'.0-code/config.json'),'utf8'));
+    const proposed=normalizeProjectConfig(config??existing);
+    return planProjectInstallation(root,{source,config:proposed,upgrade:true,adoptionManifest,documentManifest});
   }
   const proof=readMigrationEvidence(source),removed=[],preserved=[],originalFiles=new Map();
   for(const entry of proof.files) {
@@ -88,17 +94,23 @@ export function planProjectMigration(root,{source=FRAMEWORK_SOURCE,config}={}) {
   if(hashBytes(settingsBefore)!==hashBytes(settingsAfter))originalFiles.set(settingsPath,settingsAfter);
   const scan=scanProject(root),deleted=new Set(removed.map(entry=>entry.path));
   const inventory={...scan.inventory,tools:(scan.inventory.tools||[]).filter(tool=>!deleted.has(tool.path))};
-  const prepared=planProjectInstallation(root,{source,config:config??scan.suggestedConfig,originalFiles,inventory});
+  // Removing legacy code does not relocate documents. Preserve their roles until a move plan exists.
+  const documents=scan.inventory.installation.detected?scan.suggestedConfig.documents:LEGACY_DOCUMENT_DEFAULTS;
+  const proposed=normalizeProjectConfig(config??{...scan.suggestedConfig,documents},{documentDefaults:documents});
+  const prepared=planProjectInstallation(root,{source,config:proposed,originalFiles,inventory,documentManifest,
+    documentConfig:normalizeProjectConfig({...scan.suggestedConfig,documents})});
   const backups=[],runtime=[];
   const receipt={...prepared.receipt,migration:{versions:proof.versions.map(entry=>({tag:entry.tag,commit:entry.commit,url:entry.url})),removed,preserved,backups,runtime}};
   const plan=copyPreparedPlan(prepared,receipt);
+  plan.preflight=prepared.plan.preflight;plan.enterGuard=prepared.plan.enterGuard;
+  plan.cycleLockPaths=prepared.plan.cycleLockPaths;
   for(const path of new Set([...removed.map(entry=>entry.path),...originalFiles.keys()])) {
     const snapshot=fileSnapshot(root,path),backup='.0-code/run/migration/'+hashBytes(Buffer.from(path))+'.bin';
     plan.change(backup,snapshot.bytes,{mode:0o600,preserveMode:false});backups.push({path,backup,hash:snapshot.hash,mode:snapshot.mode});
     if(deleted.has(path))plan.change(path,null,{overwrite:true,expectedHash:snapshot.hash});
   }
   for(const name of ['.loop.lock','.loop-progress','.loop-children']) {
-    const path=join(dirname(DOCUMENT_DEFAULTS.state.path),name).replaceAll('\\','/'),snapshot=fileSnapshot(root,path);
+    const path=join(dirname(LEGACY_DOCUMENT_DEFAULTS.state.path),name).replaceAll('\\','/'),snapshot=fileSnapshot(root,path);
     if(snapshot.bytes===null)continue;
     let data;try{data=JSON.parse(snapshot.bytes.toString('utf8'));}catch{throw new Error('Legacy runtime format is ambiguous: '+path);}
     if(name==='.loop.lock') {

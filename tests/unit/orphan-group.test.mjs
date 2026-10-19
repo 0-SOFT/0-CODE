@@ -366,6 +366,7 @@ test('all adapters expose refused cleanup as fatal before timeout, budget or sub
       .replaceAll('import.meta.url', JSON.stringify(new URL(`../../core/backends/${file}.mjs`, import.meta.url).href));
     for (const stop of [{ timedOut: true }, { aborted: true }]) {
       const context = { Backend: class {}, Buffer, validateCodexRuntimeOptions, withoutOwnerTelegramEnvironment,
+        loadProjectConfig: () => ({ installed: false }),
         loadEngineSettingsEnvironment, resolveEngineSettings, DEFAULT_IDLE_TIMEOUT_MS, DEFAULT_TURN_TIMEOUT_MS, resolveMode, ALLOW_ALL,
         CodexHome: class { mode = 'managed'; prepareExecution() { return { home: 'owned', executionHome: 'owned', mode: 'managed', guardEnabled: true, overrides: [] }; } }, process: { env: {} }, fileURLToPath, URL, dirname, join, resolve, existsSync, statSync, readFileSync,
         runCli() {}, runCliAsync: async () => ({ status: null, stdout: '',

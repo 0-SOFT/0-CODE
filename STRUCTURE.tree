@@ -21,7 +21,9 @@
 |   +-- project-config.mjs           # Configuration schema, defaults and document roles.
 |   +-- project-inventory.mjs        # Read-only project scan; owner tools take precedence.
 |   +-- project-installation.mjs     # Owned project install, upgrade and uninstall.
-|   +-- project-migration.mjs        # Requires excluded published 1.x ownership evidence.
+|   +-- project-migration.mjs        # Explicit adoption, relocation and proven 1.x migration.
+|   +-- project-adoption.mjs         # Reviewed hashes and retained project extensions.
+|   +-- document-relocation.mjs      # Exact document moves and cycle pointer updates.
 |   +-- project-doctor.mjs           # Local checks; no model call or proof of live MCP access.
 |   +-- project-start.mjs            # Bind a cycle prompt and print driver commands.
 |   +-- user-installation.mjs        # Independent user tools and their native settings receipt.
@@ -61,6 +63,10 @@ and credentials; development reports, prompts, decisions, findings and logs;
 config/legacy-installations.json and checks requiring its ownership evidence;
 the development-only exporter and its private rules. No Claude plugin installation.
 
-Document role paths such as docs/STATE.md, docs/ROADMAP.md and docs/reports remain
-configurable in an installed project; they are not bundled development records.
-Runtime files and backups belong in ignored .0-code/run/.
+New installations default all nine document roles to .0-code/docs/: STATE.md,
+ROADMAP.md, reports/, decisions/, todo/, logs/, prompts/, prompts/templates/ and
+userdocs/. Explicit external roles remain supported; upgrade keeps existing paths
+unless relocation is requested. Cycle documents belong to the project and remain
+outside the receipt; they survive upgrade/uninstall. Logs are ignored. Runtime and
+backups belong in ignored .0-code/run/ and are removed by uninstall. Reviewed
+adopted bin/, claude/ and README extensions remain separate from replaceable code.

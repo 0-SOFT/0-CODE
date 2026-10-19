@@ -1,8 +1,8 @@
-<!-- tracks: README.md sha256:3861ef6052d0 -->
+<!-- tracks: README.md sha256:6be15af01675 -->
 
 # 0-CODE
 
-**版本:** v2.0.4
+**版本:** v2.1.0
 
 适用于 **Claude Code、Codex 和 OpenCode** 的自主开发循环，可集成到现有项目。一个循环提示词可以涵盖研究、实现、修复、审计和版本发布。
 
@@ -25,6 +25,18 @@
 [公共工具目录](toolset/CATALOG.md)包含 **五个默认 MCP：context7、playwright、chrome-devtools、sequential-thinking 和 memory**。npm 包版本须不低于经过验证的 SemVer 下限，且包名和入口正确；保留符合要求的较新版本。无需外部 API 密钥；浏览器工具还需要可用浏览器。注册成功和 doctor 通过不代表已建立实际连接。私有技能、智能体、命令和规则的实现文件不包含在内。MCP 清单中的可选账户示例只有明确配置并授权后才启用。
 
 默认采用**每用户一份独立安装**，供其项目共享。重复安装相同选择不会修改任何文件。project 范围可在单个项目固定不同选择。卸载项目保留机器工具；`uninstall-tools` 单独卸载它们并恢复原有原生配置。绝不复制认证文件。[配置与前置条件](docs/PROJECT_SETTINGS.md)。
+
+## 2.1.0 的文档、迁移与所有权
+
+新安装将九个文档角色放在 `.0-code/docs/`：`STATE.md`、`ROADMAP.md`、`reports/`、`decisions/`、`todo/`、`logs/`、`prompts/`、`prompts/templates/` 和 `userdocs/`。持久文档应提交到 Git；会话日志被忽略。日志也可放在 `.0-code/run/logs/`，持久角色不能使用运行时目录。显式外部角色仍受支持，普通 upgrade 保持现有路径。文档不属于所有权收据：doctor 接受它们，upgrade 保留它们，uninstall 保留文档及目录并删除运行时文件和备份。
+
+迁移 2.0.x 的标准 `docs/*` 角色时，显式使用 `upgrade --relocate-documents <files.json>` 或 `migrate --relocate-documents <files.json>`，先加 `--dry-run`。审核精确文件列表；未列出的产品文档留在原处。配置、STATE 指针和选定模板会更新，被改写的原始字节会归档。自定义外部路径不变。迁移或接纳安装前，先完成循环、收集后台任务并停止驱动；活动锁或输入变化会导致拒绝。将移动一起暂存到 Git，以识别重命名。
+
+没有收据的定制 `.0-code/` 安装可通过 `migrate --adopt-manifest <manifest.json>` 接纳，使用审核过的 SHA-256 和 `replace`/`preserve` 操作。只能保留精确列出的 `bin/`、`claude/` 和 `.0-code/README.md` 项目扩展；框架代码会替换并归档。扩展仍可编辑，upgrade/uninstall 会保留它们。未知文件或哈希不符会导致拒绝；接纳与文档迁移必须分开。替换生成的指引前，将自定义 AGENT 规则保存为文档，并通过 `instructions.project_rules` 引用。
+
+Claude 可使用 `instructions.claude: session-hook` 而不写入 `CLAUDE.md`。设置 `instructions.claude_settings: .0-code/claude/settings.json` 可使用会话配置，保留启动器、MCP 和 system-prompt 文件。通过 `claude --settings .0-code/claude/settings.json` 启动；普通会话不会自动加载该文件。兼容设置保留原策略；外来 Stop/guard 钩子需要审核。Uninstall 恢复原设置。Doctor 检查本地钩子，不评估用户、managed 或 CLI 覆盖。[格式、命令和限制](docs/PROJECT_SETTINGS.md)。
+
+2.1.0 的开发验收在 Windows 和 Node 24 上完成，未覆盖 Linux、macOS 或 Node 20/22；配置了 CI 矩阵并不证明已经执行。文件系统和覆盖率限制见[验证范围](docs/PROJECT_SETTINGS.md#validation-scope)。
 
 ## 使用与维护
 

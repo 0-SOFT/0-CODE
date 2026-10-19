@@ -91,7 +91,16 @@ test('a lexical descendant alias remains refused even when it resolves outside t
 });
 test('a canonical alias outside the source to another external directory remains usable',{skip},t=>{
  const f=fixture(t),destination=join(f.outer,'outside'),alias=join(f.outer,'alias');mkdirSync(destination);
- const before=f.snapshot();assert.equal(validator([[alias,destination]])(join(alias,'new','public'),f.source),join(destination,'new','public'));assert.deepEqual(f.snapshot(),before);
+ const before=f.snapshot();assert.equal(validator([[alias,destination]])(join(alias,'new','public'),f.source),join(realpathSync.native(destination),'new','public'));assert.deepEqual(f.snapshot(),before);
+});
+test('short-name source and target aliases preserve canonical paths and overlap refusals',{skip},t=>{
+ const f=fixture(t),destination=join(f.outer,'outside long directory'),shortSource=join(f.outer,'SOURCE~1'),shortTarget=join(f.outer,'OUTSID~1');mkdirSync(destination);
+ // The filesystem oracle models 8.3 expansion even when the host disables short names.
+ const validate=validator([[shortSource,f.source],[shortTarget,destination]]),before=f.snapshot();
+ assert.equal(validate(join(shortTarget,'new','public'),shortSource),join(realpathSync.native(destination),'new','public'));
+ assert.throws(()=>validate(join(f.source,'new','public'),shortSource),/target overlaps the development source tree/);
+ assert.throws(()=>validate(join(shortSource,'new','public'),f.source),/target overlaps the development source tree/);
+ assert.deepEqual(f.snapshot(),before);assert.equal(existsSync(join(destination,'new')),false);assert.equal(existsSync(join(f.source,'new')),false);
 });
 test('an existing unresolved link is refused instead of being treated as a missing tail',{skip},t=>{
  const f=fixture(t),alias=join(f.outer,'dangling'),before=f.snapshot();

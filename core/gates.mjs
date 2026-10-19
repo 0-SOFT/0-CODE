@@ -24,7 +24,7 @@ import { exceedsBackstop } from './loop-limits.mjs';
 import { summariseJobs, terminalAdvice } from './long-jobs.mjs';
 import { findDecisionFor, summariseDecision } from './decision-record.mjs';
 import { reviewStatus, reviewDirective } from './roadmap-review.mjs';
-import { DOCUMENT_DEFAULTS, loadProjectConfig } from './project-config.mjs';
+import { LEGACY_DOCUMENT_DEFAULTS, loadProjectConfig } from './project-config.mjs';
 
 // Loop "adoption" logic (v0.5.9 — the root fix for continuity):
 // last_session_id in STATE records the last session that WROTE to it, not the live one. When a
@@ -79,8 +79,8 @@ export function decideContinuation(state, { sessionId = '', driver = '', jobs = 
   project = null, statePath } = {}) {
   const st = state && typeof state === 'object' ? state : {};
   project ??= projectDir ? loadProjectConfig({ projectDir }) : null;
-  statePath ??= project?.documentRelative('state') ?? DOCUMENT_DEFAULTS.state.path;
-  const roadmapPath = project?.documentRelative('roadmap') ?? DOCUMENT_DEFAULTS.roadmap.path;
+  statePath ??= project?.documentRelative('state') ?? LEGACY_DOCUMENT_DEFAULTS.state.path;
+  const roadmapPath = project?.documentRelative('roadmap') ?? LEGACY_DOCUMENT_DEFAULTS.roadmap.path;
 
   const blockers = blockerList(st.blockers);
   const released = st.released_version ? String(st.released_version) : '';

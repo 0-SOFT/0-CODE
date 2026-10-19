@@ -60,10 +60,10 @@ import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, statSyn
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { hostname } from 'node:os';
-import { DOCUMENT_DEFAULTS, loadProjectConfig } from './project-config.mjs';
+import { LEGACY_DOCUMENT_DEFAULTS, loadProjectConfig } from './project-config.mjs';
 import { replaceFileSync, retryWindowsFileOperation } from '../lib/replace-file.mjs';
 
-export const LOCK_FILE = join(dirname(DOCUMENT_DEFAULTS.state.path), '.loop.lock');
+export const LOCK_FILE = join(dirname(LEGACY_DOCUMENT_DEFAULTS.state.path), '.loop.lock');
 export const LOCK_BUSY = 'busy';
 
 // How long the lock is considered alive without a heartbeat update.
@@ -208,9 +208,23 @@ function describeOwner(lock) {
 // already removed it, we must not remove the directory: it may now belong to another process.
 // rmdir refuses a newly published nonempty mutex even after the old marker was removed.
 function removeMutationMarker(directory, marker) {
-  try { unlinkSync(join(directory, marker)); }
+  let observed;
+  try {
+    observed = lstatSync(directory, { bigint: true });
+    if (!observed.isDirectory() || observed.isSymbolicLink()) return false;
+    unlinkSync(join(directory, marker));
+  }
   catch (e) { if (e.code === 'ENOENT') return false; throw e; }
-  try { rmdirSync(directory); }
+  try {
+    // Windows can briefly refuse deletion after a concurrent directory probe. Each retry must
+    // still target the directory whose unique marker we removed, never a replacement mutex.
+    retryWindowsFileOperation(() => {
+      const current = lstatSync(directory, { bigint: true });
+      if (!current.isDirectory() || current.isSymbolicLink()
+          || current.dev !== observed.dev || current.ino !== observed.ino) return;
+      rmdirSync(directory);
+    });
+  }
   catch (e) { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(e.code)) throw e; }
   return true;
 }
@@ -237,7 +251,12 @@ function reclaimMutation(directory) {
 }
 
 function enterMutation(projectDir) {
-  const path = lockPath(projectDir), directory = path + '.guard';
+  return enterLoopMutationAt(lockPath(projectDir));
+}
+
+// Installation relocation holds both old and new runtime guards across publication.
+export function enterLoopMutationAt(path) {
+  const directory = path + '.guard';
   const staging = directory + '-' + randomUUID(), marker = 'owner-' + randomUUID() + '.json';
   mkdirSync(dirname(path), { recursive: true });
   mkdirSync(staging);

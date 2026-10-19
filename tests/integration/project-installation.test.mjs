@@ -26,7 +26,7 @@ function projectFiles(root) {
   function visit(directory,path='') {
     for(const entry of readdirSync(directory,{withFileTypes:true})) {
       const child=path?path+'/'+entry.name:entry.name;
-      if(child==='.0-code'||child==='docs') continue;
+      if(child==='.0-code') continue;
       if(entry.isDirectory()) visit(join(directory,entry.name),child);
       else map.set(child,readFileSync(join(directory,entry.name)).toString('base64'));
     }
@@ -72,8 +72,8 @@ test('isolated core lifecycle preserves colliding source folders and project byt
   await assert.rejects(guard['tool.execute.before']({tool:'bash'},{args:{command:'git push --force'}}),/force/i);
   await guard['tool.execute.before']({tool:'bash'},{args:{command:'git status'}});
   uninstallProject(root);
-  assert.equal(existsSync(join(root,'.0-code')),false);assert.deepEqual(projectFiles(root),before);
-  assert.equal(existsSync(join(root,'docs/STATE.md')),true);assert.equal(existsSync(join(root,'docs/ROADMAP.md')),true);
+  assert.deepEqual(readdirSync(join(root,'.0-code')),['docs']);assert.deepEqual(projectFiles(root),before);
+  assert.equal(existsSync(join(root,'.0-code/docs/STATE.md')),true);assert.equal(existsSync(join(root,'.0-code/docs/ROADMAP.md')),true);
 });
 
 test('native ownership survives a Git clone without private backups and preserves later owner additions',t=>{
@@ -97,7 +97,7 @@ test('native ownership survives a Git clone without private backups and preserve
       const owned=doctorProject(clone,{env:{...process.env,PATH:''}}).checks.find(check=>check.id==='owned-files');assert.equal(owned.ok,true,owned.reason);
       upgradeProject(clone);assert.equal(installProject(clone).result.changed,0);
     }
-    uninstallProject(clone);assert.equal(existsSync(join(clone,'.0-code')),false);
+    uninstallProject(clone);assert.deepEqual(readdirSync(join(clone,'.0-code')),['docs']);
     assert.equal(readFileSync(join(clone,'CLAUDE.md'),'utf8'),originals['CLAUDE.md'].replaceAll('\n','\r\n'));
     const settings=JSON.parse(readFileSync(join(clone,'.claude/settings.json'),'utf8'));
     assert.equal(settings.owner,'private-fixture');assert.deepEqual(settings.hooks,{PreToolUse:[]});assert.equal(settings.permissions,undefined);
@@ -125,7 +125,8 @@ test('custom roles preserve an existing plan and machine state and keep their ow
   const root=fixture(t,{'work/status.md':state,'CHANGELOG.md':'# Project history\n','patterns/cycle.md':'Own template'});
   const config=configuration({documents:{state:{path:'work/status.md'},roadmap:{path:'CHANGELOG.md'},templates:{path:'patterns'},decisions:{path:'docs/adr'}}});
   installProject(root,{config});assert.equal(readFileSync(join(root,'work/status.md'),'utf8'),state);
-  assert.equal(readFileSync(join(root,'CHANGELOG.md'),'utf8'),'# Project history\n');assert.equal(existsSync(join(root,'docs/STATE.md')),false);
+  assert.equal(readFileSync(join(root,'CHANGELOG.md'),'utf8'),'# Project history\n');
+  for(const path of ['docs/STATE.md','.0-code/docs/STATE.md']) assert.equal(existsSync(join(root,path)),false);
   uninstallProject(root);assert.equal(readFileSync(join(root,'work/status.md'),'utf8'),state);assert.equal(readFileSync(join(root,'patterns/cycle.md'),'utf8'),'Own template');
 });
 test('module changes add and remove owned assets, preserving the editable project configuration',t=>{
@@ -138,7 +139,7 @@ test('module changes add and remove owned assets, preserving the editable projec
   assert.equal(JSON.parse(readFileSync(configFile,'utf8')).language,'de');
   config.modules.audits=false;config.modules.telegram=false;writeFileSync(configFile,JSON.stringify(config));upgradeProject(root);
   assert.equal(existsSync(join(root,'.0-code/core/audit-ledger.mjs')),false);assert.equal(existsSync(join(root,'.0-code/lib/telegram-notify.sh')),false);
-  uninstallProject(root);assert.equal(existsSync(join(root,'.0-code')),false);
+  uninstallProject(root);assert.deepEqual(readdirSync(join(root,'.0-code')),['docs']);
 });
 test('modified installed files and new unowned files survive refused upgrade and uninstall',t=>{
   const root=fixture(t);installProject(root,{config:configuration()});
@@ -150,7 +151,7 @@ test('modified installed files and new unowned files survive refused upgrade and
 });
 test('receipt and state ownership checks never accept arbitrary shapes or hash claims',t=>{
   const root=fixture(t,{'.0-code/installation.json':'{"schema_version":1}'});assert.throws(()=>readInstallationReceipt(root),/Invalid/);
-  const other=fixture(t,{'docs/STATE.md':'# Human notes'});assert.throws(()=>installProject(other,{config:configuration()}),/machine state/);
+  const other=fixture(t,{'docs/STATE.md':'# Human notes'});assert.throws(()=>installProject(other,{config:configuration({documents:{state:{path:'docs/STATE.md'}}})}),/machine state/);
   assert.equal(existsSync(join(other,'.0-code')),false);assert.equal(readFileSync(join(other,'docs/STATE.md'),'utf8'),'# Human notes');
 });
 
@@ -166,6 +167,7 @@ test('doctor never executes a guard whose installed bytes failed ownership',t=>{
 
 const matrix=[
   {name:'empty repository',files:{}},
+  {name:'fresh product documents retain their paths and bytes',files:{'docs/STATE.md':'# Product state\r\nHuman notes.\r\n','docs/ROADMAP.md':'# Product roadmap\n','docs/prompts/owner.md':'# Product prompt\n'}},
   {name:'Python source folder collisions',files:{'core/main.py':'print("owner")\r\n','lib/data.py':'OWNER = True\n','hooks/check.py':'# Owner hook\n','pyproject.toml':'[project]\nname = "owner-project"\nversion = "1.0.0"\n'}},
   {name:'JS monorepo with native owner tools',files:{'package.json':JSON.stringify({name:'owner-monorepo',type:'commonjs',private:true,workspaces:['packages/*'],scripts:{test:'node --test'}}),
     'packages/app/main.js':'export const owner = true;\n','.claude/skills/owner-review/SKILL.md':'---\nname: owner-review\ndescription: Review the owner project.\n---\nUse its own tests.\n',
@@ -182,11 +184,13 @@ for(const item of matrix)test('lifecycle matrix: '+item.name,t=>{
   const config=configuration(item.config),installed=installProject(root,{config});assert.ok(installed.result.changed>0);
   const doctor=doctorProject(root);const probes=assertLifecycleDoctor(doctor,{cwd:root,engines:config.engines});
   assert.equal(installProject(root).result.changed,0);assert.equal(upgradeProject(root).result.changed,0);
-  uninstallProject(root);assert.equal(existsSync(join(root,'.0-code')),false);
+  const state=config.documents?.state?.path||'.0-code/docs/STATE.md',roadmap=config.documents?.roadmap?.path||'.0-code/docs/ROADMAP.md';
+  const stateBytes=readFileSync(join(root,state)),roadmapBytes=readFileSync(join(root,roadmap));
+  uninstallProject(root);assert.deepEqual(readdirSync(join(root,'.0-code')),['docs']);
+  assert.deepEqual(readFileSync(join(root,state)),stateBytes);assert.deepEqual(readFileSync(join(root,roadmap)),roadmapBytes);
   for(const [path,bytes] of before)assert.deepEqual(readFileSync(join(root,path)),bytes,path);
   const remaining=new Map(projectFiles(root));
   for(const path of before.keys())remaining.delete(path);
-  const state=config.documents?.state?.path||'docs/STATE.md',roadmap=config.documents?.roadmap?.path||'docs/ROADMAP.md';
   remaining.delete(state);remaining.delete(roadmap);assert.equal(remaining.size,0,JSON.stringify([...remaining.keys()]));
   t.diagnostic(JSON.stringify({case:item.name,doctor:doctor.ok,engines:probes,repeat_changed:0,upgrade_changed:0,owner_files:before.size,owner_bytes_preserved:true}));
 });

@@ -50,10 +50,10 @@ test('actual CLI core lifecycle: read-only preview, install, native doctor contr
     assert.equal(JSON.parse(repeated.stdout).changed, 0);
   }
   const removed = await run(root, ['uninstall'], true); assert.equal(removed.status, 0, removed.stderr);
-  assert.equal(existsSync(join(root, '.0-code')), false);
+  assert.deepEqual(readdirSync(join(root, '.0-code')), ['docs']);
   assert.equal(readFileSync(join(root, 'CLAUDE.md'), 'utf8'), '# Own instructions\r\n');
   assert.equal(readFileSync(join(root, '.gitignore'), 'utf8'), 'private/\n');
-  assert.equal(existsSync(join(root, 'docs/STATE.md')), true);
+  assert.equal(existsSync(join(root, '.0-code/docs/STATE.md')), true);
 });
 test('actual start atomically binds version, stage, prompt, cap and fresh instruction; active cycle refuses replacement', async t => {
   const { root, file } = fixture(t, { documents: { state: { path: 'cycle/status.md' }, prompts: { path: 'cycle/prompts', name: '<version>-<name>.md' } } });
@@ -74,7 +74,7 @@ test('actual start atomically binds version, stage, prompt, cap and fresh instru
 });
 test('invalid limits, prompt shape and occupied prompt path refuse without touching state', async t => {
   const { root, file } = fixture(t); assert.equal((await run(root, ['install', '--config', file])).status, 0);
-  const prompt = join(root, 'owner.md'), state = join(root, 'docs/STATE.md'), before = readFileSync(state);
+  const prompt = join(root, 'owner.md'), state = join(root, '.0-code/docs/STATE.md'), before = readFileSync(state);
   for (const contents of ['# No metadata', '---\nversion: "x"\nstage: 2\n---\n', '---\nversion: "2.0.0"\nstage: 8\n---\n']) {
     writeFileSync(prompt, contents); assert.notEqual((await run(root, ['start', prompt], true)).status, 0); assert.deepEqual(readFileSync(state), before);
   }
@@ -82,9 +82,9 @@ test('invalid limits, prompt shape and occupied prompt path refuse without touch
   for (const limit of ['0', '-1', 'no', '9007199254740992']) {
     assert.notEqual((await run(root, ['start', prompt, '--max', limit], true)).status, 0); assert.deepEqual(readFileSync(state), before);
   }
-  mkdirSync(join(root, 'docs/prompts'), { recursive: true }); writeFileSync(join(root, 'docs/prompts/2.0.0_owner.md'), 'existing project prompt');
+  mkdirSync(join(root, '.0-code/docs/prompts'), { recursive: true }); writeFileSync(join(root, '.0-code/docs/prompts/2.0.0_owner.md'), 'existing project prompt');
   const occupied = await run(root, ['start', prompt], true); assert.notEqual(occupied.status, 0);
-  assert.equal(readFileSync(join(root, 'docs/prompts/2.0.0_owner.md'), 'utf8'), 'existing project prompt'); assert.deepEqual(readFileSync(state), before);
+  assert.equal(readFileSync(join(root, '.0-code/docs/prompts/2.0.0_owner.md'), 'utf8'), 'existing project prompt'); assert.deepEqual(readFileSync(state), before);
 });
 test('doctor reports changed code and invalid config instead of claiming readiness', async t => {
   const { root, file } = fixture(t); assert.equal((await run(root, ['install', '--config', file])).status, 0);

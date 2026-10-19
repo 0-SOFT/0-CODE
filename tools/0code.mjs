@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inventorySummary, scanProject } from '../core/project-inventory.mjs';
-import { findProjectRoot } from '../core/project-config.mjs';
+import { findProjectRoot, loadProjectConfig } from '../core/project-config.mjs';
 import { installProject, planProjectInstallation, planProjectUninstall, uninstallProject, upgradeProject } from '../core/project-installation.mjs';
 import { doctorProject } from '../core/project-doctor.mjs';
 import { planProjectStart, startProjectCycle } from '../core/project-start.mjs';
@@ -18,7 +18,7 @@ Commands:
   scan            Inspect a project and suggest configuration without writes
   install         Install into .0-code and configured native engine locations
   upgrade         Upgrade an owned installation, preserving project preferences
-  migrate         Migrate proven owned 1.x files with a reviewed source
+  migrate         Migrate proven legacy files or relocate owned project documents
   uninstall       Remove owned project files; preserve documents and machine tools
   doctor          Check local installation and MCP prerequisites
   start <prompt>  Bind a cycle prompt and print its driver command
@@ -33,6 +33,8 @@ Options:
   --backend <id>  claude, codex or opencode for those installation commands
   --max <N>       Positive cycle limit for start
   --dry-run       Preview mutations without applying (not scan or doctor)
+  --relocate-documents <file>  Reviewed JSON {schema_version:1,files:[paths]} for upgrade/migrate
+  --adopt-manifest <file>  Reviewed hash manifest for a customized installation without a receipt (migrate)
   --json          Machine-readable result
   --help, -h      Show this help without writes
 
@@ -48,8 +50,8 @@ export function parseOptions(argv) {
   if (!COMMANDS.includes(command)) throw new Error('Unknown installer command');
   const options = { command, projectDir: findProjectRoot(), json: false, dryRun: false };
   const seen = new Set();
-  const valued = { '--project': 'projectDir', '--config': 'configFile', '--source': 'source', '--backend': 'backend', '--max': 'maxIterations' };
-  const permitted = { '--config': ['install', 'upgrade','install-tools','migrate'], '--source': ['install', 'upgrade','install-tools','migrate'], '--backend': ['install', 'upgrade','install-tools','migrate'], '--max': ['start'] };
+  const valued = { '--project': 'projectDir', '--config': 'configFile', '--source': 'source', '--backend': 'backend', '--max': 'maxIterations', '--relocate-documents':'documentManifestFile', '--adopt-manifest':'adoptionManifestFile' };
+  const permitted = { '--config': ['install', 'upgrade','install-tools','migrate'], '--source': ['install', 'upgrade','install-tools','migrate'], '--backend': ['install', 'upgrade','install-tools','migrate'], '--max': ['start'], '--relocate-documents':['upgrade','migrate'], '--adopt-manifest':['migrate'] };
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i];
     if (flag === '--json' || flag === '--dry-run') {
@@ -99,8 +101,14 @@ export async function main(argv = process.argv.slice(2), write = text => process
     else if (options.command === 'uninstall') prepared = options.dryRun ? planProjectUninstall(root) : uninstallProject(root);
     else {
       let config = options.configFile ? JSON.parse(readFileSync(options.configFile, 'utf8')) : undefined;
-      if (options.backend) config = { ...(config || scanProject(root).suggestedConfig), engines: [options.backend] };
+      if (options.backend) {
+        const base=config??scanProject(root).suggestedConfig;
+        const roles=!config&&options.command==='migrate'?{documents:loadProjectConfig({projectDir:root}).config.documents}:{};
+        config={...base,...roles,engines:[options.backend]};
+      }
       const args = { ...(config !== undefined ? { config } : {}), ...(options.source ? { source: options.source } : {}) };
+      if(options.documentManifestFile)args.documentManifest=JSON.parse(readFileSync(options.documentManifestFile,'utf8'));
+      if(options.adoptionManifestFile)args.adoptionManifest=JSON.parse(readFileSync(options.adoptionManifestFile,'utf8'));
       if(!options.dryRun)recoverInstallation(root);
       prepared=options.command==='migrate'?planProjectMigration(root,args):planProjectInstallation(root,{...args,upgrade:options.command==='upgrade'});
       if(prepared.config.modules.toolset&&prepared.config.toolset.scope==='user') {
@@ -115,6 +123,8 @@ export async function main(argv = process.argv.slice(2), write = text => process
       changed: prepared.result?.changed ?? 0, plan: prepared.plan?prepared.plan.summary():prepared.plans.flatMap(plan=>plan.summary().map(entry=>({...entry,root:plan.root}))),
       ...(prepared.machinePlan?{machinePlan:prepared.machinePlan}:{}),
       ...(prepared.migration?{migration:prepared.migration}:{}),
+      ...(prepared.documentMigration?{documentMigration:prepared.documentMigration}:{}),
+      ...(prepared.adoption?{adoption:prepared.adoption}:{}),
       ...(prepared.config ? { framework_version: prepared.config.framework_version, modules: prepared.bundle.modules } : {}),
       ...(prepared.prompt ? { prompt: prepared.prompt, drivers: prepared.drivers } : {}) };
     if (!options.json) {

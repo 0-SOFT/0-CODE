@@ -32,6 +32,7 @@ AGENTS.md
 # files — a proven leak channel, not a theoretical one. Durable records of the loop's work
 # belong in the configured reports role.
 docs/logs/
+.0-code/docs/logs/
 
 # Loop runtime state: it describes a process, not the project
 .0-code/run/

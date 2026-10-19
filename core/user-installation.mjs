@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { existsSync, readFileSync, readdirSync, rmdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { resolveUserProfiles, compileUserTool } from './user-profiles.mjs';
-import { normalizeProjectConfig, resolveProjectPath } from './project-config.mjs';
+import { isDocumentZone, normalizeProjectConfig, resolveProjectPath } from './project-config.mjs';
 import { assembleInstallationBundle, FRAMEWORK_SOURCE } from './installation-bundle.mjs';
 import { InstallationPlan, fileSnapshot, hashBytes, GROUP_JOURNAL } from './installation-transaction.mjs';
 import { applyInstallationGroup, recoverInstallationGroup } from './installation-group.mjs';
@@ -57,7 +57,10 @@ export function planUserInstallation({config,source=FRAMEWORK_SOURCE,...options}
   const all={...settings,engines:[...new Set([...settings.engines,...(receipt?.config?.engines||[])])]};
   const {scopes,get}=scopesFor(all,profiles);
   validatePrevious(root,receipt,scopes);
-  if(!receipt&&existsSync(file(root,'.0-code')))throw new Error('Machine directory has no ownership receipt');
+  if(!receipt&&existsSync(file(root,'.0-code'))) {
+    try { requireOwnership(root,{files:[],directories:[]}); }
+    catch(error) { throw new Error('Machine directory has no ownership receipt: '+error.message,{cause:error}); }
+  }
   const before=(scope,path)=>originalSnapshot(scope.root,path,receipt?.profiles.find(entry=>entry.root===scope.root)).bytes;
   // Installed user-scoped project kernels intentionally do not duplicate machine tool sources.
   const sourceReceipt=readInstallationReceipt(dirname(source));
@@ -163,6 +166,7 @@ export function planUserUninstall(options={}) {
   return {root,receipt,plans};
 }
 function prune(root,path) {
+  if(isDocumentZone(path))return;
   if(!existsSync(file(root,path)))return;
   for(const entry of readdirSync(file(root,path),{withFileTypes:true}))if(entry.isDirectory())prune(root,path+'/'+entry.name);
   try{retryWindowsFileOperation(()=>rmdirSync(file(root,path)),{validate:()=>file(root,path)});}catch(error){if(!['ENOENT','ENOTEMPTY','EEXIST'].includes(error.code))throw error;}

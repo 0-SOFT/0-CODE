@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { scanProject, inventorySummary } from '../../core/project-inventory.mjs';
+import { DOCUMENT_DEFAULTS, LEGACY_DOCUMENT_DEFAULTS } from '../../core/project-config.mjs';
 import { cleanupTempDir } from '../helpers/index.mjs';
 
 const repository=fileURLToPath(new URL('../../',import.meta.url));
@@ -31,6 +32,7 @@ test('empty project scan is deterministic and creates no installation or documen
   assert.deepEqual(first.inventory.tools,[]);
   assert.deepEqual(first.suggestedConfig.engines,['claude']);
   assert.equal(first.suggestedConfig.language,'en');
+  assert.deepEqual(first.suggestedConfig.documents,DOCUMENT_DEFAULTS);
   assert.match(inventorySummary(first),/Check commands: 0/);
 });
 
@@ -116,7 +118,20 @@ test('legacy ownership is only reported as a candidate; scan never deletes it',t
   const before=tree(root),result=scanProject(root);
   assert.equal(result.inventory.legacy.detected,true);
   assert.equal(result.inventory.legacy.frameworkVersion,'1.30.0');
+  assert.deepEqual(result.suggestedConfig.documents,LEGACY_DOCUMENT_DEFAULTS);
   assert.deepEqual(tree(root),before);
+});
+
+test('product docs do not select legacy defaults, while explicit installed roles survive inventory',t=>{
+  const root=fixture(t,{'docs/STATE.md':'# Product state','docs/ROADMAP.md':'# Product plan'});
+  const before=tree(root);
+  assert.deepEqual(scanProject(root).suggestedConfig.documents,DOCUMENT_DEFAULTS);
+  assert.deepEqual(tree(root),before);
+  mkdirSync(join(root,'.0-code'));
+  writeFileSync(join(root,'.0-code/config.json'),JSON.stringify({documents:LEGACY_DOCUMENT_DEFAULTS}));
+  const installed=tree(root);
+  assert.deepEqual(scanProject(root).suggestedConfig.documents,LEGACY_DOCUMENT_DEFAULTS);
+  assert.deepEqual(tree(root),installed);
 });
 
 test('malformed project metadata yields value-free diagnostics and guard conflicts',t=>{

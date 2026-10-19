@@ -1,8 +1,8 @@
-<!-- tracks: README.md sha256:6be15af01675 -->
+<!-- tracks: README.md sha256:dc67310727a4 -->
 
 # 0-CODE
 
-**버전:** v2.1.0
+**버전:** v2.1.1
 
 기존 프로젝트에 통합하는 **Claude Code, Codex, OpenCode**용 자율 개발 사이클입니다. 하나의 사이클 지시에 조사, 구현, 수정, 감사, 릴리스 작업을 함께 담을 수 있습니다.
 
@@ -16,7 +16,7 @@
 
 ## 설치 내용
 
-프레임워크 코드, 설정, 스키마, 모듈, 템플릿은 **`.0-code/`**에 있습니다. 엔진에는 필요한 네이티브 훅, 지시, 호환 도구 항목과 OpenCode 보호 플러그인만 설치합니다. 기존 코드와 문서는 보존하며 충돌이나 변경된 소유 파일은 쓰기 전에 알립니다. 실행 파일과 백업은 git에서 제외된 `.0-code/run/`에 둡니다.
+프레임워크 코드, 설정, 스키마, 모듈과 기본 템플릿은 **`.0-code/`**에 있습니다. 프로젝트가 소유하는 주기 문서는 **`.0-code/docs/`**, 실행 파일과 백업은 Git에서 제외하는 **`.0-code/run/`**에 둡니다. 일반 통합은 선택한 엔진에 필요한 네이티브 훅, 지시, 호환 도구 및 OpenCode 보호 플러그인을 추가합니다. 아래의 격리 Claude 세션은 자체 통합을 `.0-code/` 내부에 유지합니다. 기존 코드와 문서를 보존하며 충돌과 변경된 소유 파일은 쓰기 전에 알립니다.
 
 설정의 유일한 참조 문서는 [PROJECT_SETTINGS](docs/PROJECT_SETTINGS.md)입니다. 기본 문서를 사용하거나 개별 역할을 바꾸거나 모든 역할을 기존 프로젝트 규칙에 연결할 수 있습니다. 상태는 기계 판독 가능한 문서로 유지합니다. 사람을 위한 문서는 설정 언어를 사용하고 에이전트 지시는 영어로 유지합니다.
 
@@ -24,9 +24,9 @@
 
 [공개 목록](toolset/CATALOG.md)에는 **기본 MCP 다섯 개: context7, playwright, chrome-devtools, sequential-thinking, memory**가 있습니다. npm 패키지는 검증된 SemVer 최소 버전 이상이며 이름과 진입점이 올바라야 합니다. 조건에 맞는 더 최신 버전은 보존하세요. 외부 API 키는 필요 없으며 브라우저 도구에는 사용 가능한 브라우저도 필요합니다. 등록과 doctor 성공만으로 실제 연결을 입증하지는 않습니다. 비공개 스킬, 에이전트, 명령, 규칙의 구현 파일은 제외됩니다. MCP 매니페스트의 선택적 계정 서비스 예시는 명시적 설정과 인증 전까지 꺼져 있습니다.
 
-기본은 프로젝트들이 공유하는 **사용자당 하나의 독립 설치**입니다. 같은 선택을 반복 설치해도 변경되지 않습니다. project 범위로 다른 선택을 프로젝트에 고정할 수 있습니다. 프로젝트 제거는 머신 도구를 남기며 `uninstall-tools`가 별도로 도구를 제거하고 원래 네이티브 설정을 복원합니다. 인증은 복사하지 않습니다. [설정과 사전 조건](docs/PROJECT_SETTINGS.md).
+도구의 기본값은 사용자의 프로젝트가 공유하는 **사용자별 독립 설치 한 개**입니다. 같은 선택을 다시 설치해도 바뀌지 않습니다. project 범위로 프로젝트에 다른 구성을 고정할 수 있습니다. 격리 Claude의 install/upgrade/migrate는 사용자 도구를 자동 설치하지 않으므로, 별도로 명시적으로 요청한 `install-tools`가 필요합니다. 프로젝트를 제거해도 시스템 도구는 남으며, `uninstall-tools`가 별도로 제거하고 원래 설정을 복원합니다. 인증 정보는 복사하지 않습니다. [설정과 사전 요구 사항](docs/PROJECT_SETTINGS.md).
 
-## 2.1.0의 문서, 이전 및 소유권
+## 2.1.1의 문서, 이전 및 세션 격리
 
 새 설치는 아홉 문서 역할을 `.0-code/docs/` 아래에 둡니다: `STATE.md`, `ROADMAP.md`, `reports/`, `decisions/`, `todo/`, `logs/`, `prompts/`, `prompts/templates/`, `userdocs/`. 영구 문서는 Git에 저장하고 세션 로그는 제외합니다. 로그는 `.0-code/run/logs/`에도 둘 수 있지만 영구 역할에는 런타임 영역을 사용할 수 없습니다. 명시적 외부 역할은 계속 지원하며 일반 upgrade는 기존 경로를 유지합니다. 문서는 소유권 영수증에 포함되지 않습니다. doctor는 이를 허용하고 upgrade는 보존하며 uninstall은 문서와 디렉터리를 남기고 런타임 및 백업을 삭제합니다.
 
@@ -34,9 +34,11 @@
 
 영수증 없는 수정된 `.0-code/` 설치는 검토한 SHA-256 및 `replace`/`preserve` 동작을 담은 `migrate --adopt-manifest <manifest.json>`으로 인수합니다. 정확히 나열한 `bin/`, `claude/`, `.0-code/README.md` 프로젝트 확장만 보존할 수 있으며 프레임워크 코드는 교체하고 보관합니다. 확장은 편집 가능하며 upgrade/uninstall 후에도 남습니다. 알 수 없는 파일이나 해시 불일치는 거부하며 인수와 문서 이전은 별도 작업입니다. 생성된 가이드를 교체하기 전에 자체 AGENT 규칙을 문서로 저장하고 `instructions.project_rules`로 참조하세요.
 
-Claude는 `instructions.claude: session-hook`으로 `CLAUDE.md`에 쓰지 않고 실행할 수 있습니다. 세션 설정에는 `instructions.claude_settings: .0-code/claude/settings.json`을 선택하고 실행기, MCP, system-prompt를 유지하세요. `claude --settings .0-code/claude/settings.json`으로 실행해야 하며 일반 세션은 이 파일을 자동으로 로드하지 않습니다. 호환 설정은 기존 정책을 유지하고 외부 Stop/guard 훅은 검토가 필요합니다. Uninstall은 원래 설정을 복원합니다. Doctor는 로컬 훅을 확인하지만 사용자/managed/CLI 재정의는 평가하지 않습니다. [형식, 명령 및 제한](docs/PROJECT_SETTINGS.md).
+Claude 격리 세션에는 `instructions.claude: session-hook`과 `instructions.claude_settings: .0-code/claude/settings.json`이 모두 필요합니다. Claude만 선택하고 문서 역할이 내부에 있으면 install, upgrade, migrate와 설치 인수는 `.claude/`, `.mcp.json`, `CLAUDE.md`를 포함해 선택하지 않은 외부 쓰기, 삭제 또는 복구 변경을 수행하지 않습니다. 명시적 외부 문서 역할, 별도로 선택한 엔진, 따로 요청한 `install-tools`는 각 범위에 한정된 예외입니다. 이전 소유권 기록과 트랜잭션 로그는 외부 정리를 허용하지 않습니다. 정리가 필요한 전환은 쓰기 전에 거부되며 이전 모드에서 검토한 정리가 필요합니다. 일반 `project-file` 통합과 `.claude/settings.json`을 사용하는 `session-hook`은 네이티브 제공 동작을 유지합니다.
 
-2.1.0의 개발 인수 검증은 Windows와 Node 24에서 수행했습니다. Linux, macOS 및 Node 20/22는 포함하지 않았으며, CI 매트릭스 설정만으로 실행을 입증할 수는 없습니다. 파일 시스템 및 커버리지 제한은 [검증 범위](docs/PROJECT_SETTINGS.md#validation-scope)를 참고하세요.
+`claude --settings .0-code/claude/settings.json` 또는 이 파일을 전달하는 검토된 실행기로 시작하세요. SessionStart와 SubagentStart는 `.0-code/AGENT.md`를 통해 내부 오케스트레이터와 활성화된 감사 절차의 소스를 제공합니다. 네이티브 슬래시 명령은 등록하지 않습니다. `modules.audits: false`이면 감사 소스와 참조가 없습니다. 안전한 텍스트 도구는 참조로 제공할 수 있지만, 이 방법으로 제공할 수 없는 네이티브 실행 제어와 새 MCP 등록은 `unsupported`로 보고합니다. 보존한 실행기, MCP, system-prompt와 설정 정책은 유지하고 호환 설정에는 프레임워크 항목을 추가하며 uninstall은 원래 값을 복원합니다. 일반 세션은 이 파일을 자동 로드하지 않습니다. Doctor는 로컬 훅을 확인하며 사용자, 관리 설정 또는 CLI 재정의는 평가하지 않습니다. [형식, 명령 및 제한](docs/PROJECT_SETTINGS.md).
+
+실제로 검증한 플랫폼, Node 버전, 파일 시스템 제한과 커버리지 기준은 [검증 범위](docs/PROJECT_SETTINGS.md#validation-scope)에 기록합니다. CI 매트릭스를 설정한 사실만으로 실행을 입증할 수는 없습니다.
 
 ## 작업과 유지보수
 

@@ -1,9 +1,9 @@
 // Names identify candidates; only exact published bytes authorize deletion.
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { InstallationPlan, fileSnapshot, hashBytes, applyInstallationPlan, recoverInstallation } from './installation-transaction.mjs';
+import { InstallationPlan, fileSnapshot, hashBytes, applyInstallationPlan } from './installation-transaction.mjs';
 import { FRAMEWORK_SOURCE } from './installation-bundle.mjs';
-import { planProjectInstallation, readInstallationReceipt, RECEIPT_PATH } from './project-installation.mjs';
+import { planProjectInstallation, readInstallationReceipt, RECEIPT_PATH, recoverProjectInstallation } from './project-installation.mjs';
 import { scanProject } from './project-inventory.mjs';
 import { readNativeJson, nativeEntryHash, removeNativeArrayValues, removeNativeObjectValue } from '../lib/native-json.mjs';
 import { LEGACY_DOCUMENT_DEFAULTS, normalizeProjectConfig } from './project-config.mjs';
@@ -62,7 +62,7 @@ function legacySettings(bytes,proof,root) {
   return result;
 }
 function copyPreparedPlan(prepared,receipt) {
-  const plan=new InstallationPlan(prepared.root);
+  const plan=new InstallationPlan(prepared.root,{allowedPaths:prepared.plan.allowedPaths});
   for(const entry of prepared.plan.changes)if(entry.path!==RECEIPT_PATH)plan.change(entry.path,entry.after,{overwrite:true,expectedHash:entry.beforeHash,mode:entry.mode,preserveMode:false});
   plan.change(RECEIPT_PATH,json(receipt),{overwrite:true});return plan;
 }
@@ -98,7 +98,7 @@ export function planProjectMigration(root,{source=FRAMEWORK_SOURCE,config,docume
   const documents=scan.inventory.installation.detected?scan.suggestedConfig.documents:LEGACY_DOCUMENT_DEFAULTS;
   const proposed=normalizeProjectConfig(config??{...scan.suggestedConfig,documents},{documentDefaults:documents});
   const prepared=planProjectInstallation(root,{source,config:proposed,originalFiles,inventory,documentManifest,
-    documentConfig:normalizeProjectConfig({...scan.suggestedConfig,documents})});
+    documentConfig:normalizeProjectConfig({...scan.suggestedConfig,documents}),legacyFiles:removed});
   const backups=[],runtime=[];
   const receipt={...prepared.receipt,migration:{versions:proof.versions.map(entry=>({tag:entry.tag,commit:entry.commit,url:entry.url})),removed,preserved,backups,runtime}};
   const plan=copyPreparedPlan(prepared,receipt);
@@ -134,6 +134,6 @@ export function planProjectMigration(root,{source=FRAMEWORK_SOURCE,config,docume
   plan.assertReady();return {...prepared,plan,receipt,migration:receipt.migration};
 }
 export function migrateProject(root,options={}) {
-  recoverInstallation(root);const prepared=planProjectMigration(root,options);
+  recoverProjectInstallation(root,options);const prepared=planProjectMigration(root,options);
   return {...prepared,result:applyInstallationPlan(prepared.plan)};
 }

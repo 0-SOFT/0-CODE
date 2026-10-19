@@ -1,8 +1,8 @@
-<!-- tracks: README.md sha256:6be15af01675 -->
+<!-- tracks: README.md sha256:dc67310727a4 -->
 
 # 0-CODE
 
-**Version:** v2.1.0
+**Version:** v2.1.1
 
 Ein autonomer Entwicklungszyklus für **Claude Code, Codex und OpenCode**, eingebunden in ein bestehendes Projekt. Eine einzige Zyklusanweisung kann Recherche, Umsetzung, Fehlerbehebung, Audits und Veröffentlichung umfassen.
 
@@ -16,7 +16,7 @@ Der Agent erfasst Dokumente, Werkzeuge, MCP und Prüfkommandos, klärt echte Meh
 
 ## Was installiert wird
 
-Frameworkcode, Konfiguration, Schemas, Module und Vorlagen liegen in **`.0-code/`**. Die Engines erhalten nur erforderliche native Hooks, Anweisungen, kompatible Werkzeuge und das OpenCode-Schutzplugin. Bestehender Code und Dokumente bleiben erhalten; Konflikte und veränderte eigene Dateien werden vor dem Schreiben erkannt. Laufzeitdateien und Sicherungen liegen im von git ausgeschlossenen `.0-code/run/`.
+Frameworkcode, Konfiguration, Schemas, Module und integrierte Vorlagen liegen in **`.0-code/`**. Die Zyklusdokumente gehören dem Projekt und liegen in **`.0-code/docs/`**; Laufzeitdateien und Sicherungen liegen im von Git ausgeschlossenen **`.0-code/run/`**. Die normale Integration ergänzt für ausgewählte Engines die nötigen nativen Hooks, Anweisungen, kompatiblen Werkzeuge und das OpenCode-Schutzplugin; die unten beschriebene isolierte Claude-Sitzung hält ihre Integration innerhalb von `.0-code/`. Bestehender Code und Dokumente bleiben erhalten; Konflikte und veränderte eigene Dateien werden vor dem Schreiben gemeldet.
 
 [PROJECT_SETTINGS](docs/PROJECT_SETTINGS.md) ist die einzige Konfigurationsreferenz. Übernehmen Sie Standarddokumente, ändern Sie einzelne Rollen oder ordnen Sie alle Rollen vorhandenen Projektkonventionen zu. Der Zustand bleibt maschinenlesbar. Menschliche Dokumente verwenden die konfigurierte Sprache; Agentenanweisungen bleiben Englisch.
 
@@ -24,9 +24,9 @@ Modell, Denkaufwand und Anmeldung gehören dem Eigentümer. Die Priorität laute
 
 Der [öffentliche Katalog](toolset/CATALOG.md) enthält **fünf Standard-MCP: context7, playwright, chrome-devtools, sequential-thinking und memory**. Benötigt werden npm-Pakete ab der getesteten SemVer-Mindestversion mit korrektem Namen und Einstiegspunkt; gültige neuere Versionen bleiben erhalten. Externe API-Schlüssel sind nicht nötig; Browserwerkzeuge benötigen zusätzlich einen verfügbaren Browser. Registrierung und erfolgreicher doctor beweisen keine aktive Verbindung. Private Implementierungsdateien für Skills, Agenten, Kommandos und Regeln sind ausgeschlossen. Optionale Beispiele für Kontodienste im MCP-Manifest bleiben bis zur ausdrücklichen Konfiguration und Autorisierung aus.
 
-Standard ist **eine unabhängige Installation pro Benutzer**, gemeinsam für seine Projekte. Dieselbe Auswahl erneut zu installieren ändert nichts. Der Bereich project bindet eine andere Auswahl an ein Projekt. Projektentfernung behält Maschinenwerkzeuge; `uninstall-tools` entfernt sie getrennt und stellt ihre ursprünglichen Einstellungen wieder her. Authentifizierung wird nie kopiert. [Konfiguration und Voraussetzungen](docs/PROJECT_SETTINGS.md).
+Standard ist **eine unabhängige Werkzeuginstallation pro Benutzer**, gemeinsam für seine Projekte. Dieselbe Auswahl erneut zu installieren ändert nichts. Der Bereich project bindet eine andere Auswahl an ein Projekt. Isolierte Claude-Aktionen install/upgrade/migrate installieren Benutzerwerkzeuge nicht automatisch; dafür ist ein separat und ausdrücklich angefordertes `install-tools` nötig. Projektentfernung behält Maschinenwerkzeuge; `uninstall-tools` entfernt sie getrennt und stellt ihre ursprünglichen Einstellungen wieder her. Authentifizierung wird nie kopiert. [Konfiguration und Voraussetzungen](docs/PROJECT_SETTINGS.md).
 
-## Dokumente, Migration und Eigentum in 2.1.0
+## Dokumente, Migration und Sitzungsisolation in 2.1.1
 
 Neue Installationen legen alle neun Dokumentrollen unter `.0-code/docs/` ab: `STATE.md`, `ROADMAP.md`, `reports/`, `decisions/`, `todo/`, `logs/`, `prompts/`, `prompts/templates/` und `userdocs/`. Dauerhafte Dokumente gehören in Git; Sitzungsprotokolle werden ignoriert. Protokolle dürfen auch `.0-code/run/logs/` nutzen, dauerhafte Rollen keinen Laufzeitpfad. Explizite externe Rollen bleiben unterstützt; normales upgrade behält bestehende Pfade. Dokumente stehen außerhalb des Eigentumsbelegs: doctor akzeptiert sie, upgrade erhält sie, uninstall behält sie samt Verzeichnissen und entfernt Laufzeitdaten und Sicherungen.
 
@@ -34,9 +34,11 @@ Standardrollen aus `docs/*` in 2.0.x werden ausdrücklich mit `upgrade --relocat
 
 Eine angepasste `.0-code/`-Installation ohne Beleg wird über `migrate --adopt-manifest <manifest.json>` mit geprüften SHA-256-Werten und `replace`/`preserve` übernommen. Nur genau aufgeführte Projekterweiterungen in `bin/`, `claude/` und `.0-code/README.md` können erhalten bleiben; Frameworkcode wird ersetzt und archiviert. Erweiterungen bleiben bearbeitbar und überstehen upgrade/uninstall. Unbekannte Dateien oder abweichende Hashes führen zur Ablehnung; Übernahme und Verschiebung sind getrennte Vorgänge. Eigene AGENT-Regeln vorher als Dokument sichern und über `instructions.project_rules` referenzieren.
 
-Claude kann mit `instructions.claude: session-hook` ohne Änderung von `CLAUDE.md` arbeiten. Für Sitzungseinstellungen `instructions.claude_settings: .0-code/claude/settings.json` wählen und Launcher, MCP sowie system-prompt behalten. Mit `claude --settings .0-code/claude/settings.json` starten; normale Sitzungen laden diese Datei nicht automatisch. Kompatible Einstellungen behalten ihre Richtlinien; fremde Stop/guard-Hooks erfordern Prüfung. Uninstall stellt Originaleinstellungen wieder her. Doctor prüft lokale Hooks, keine Benutzer-/Managed-/CLI-Overrides. [Formate, Befehle und Grenzen](docs/PROJECT_SETTINGS.md).
+Eine isolierte Claude-Sitzung erfordert sowohl `instructions.claude: session-hook` als auch `instructions.claude_settings: .0-code/claude/settings.json`. Bei ausschließlich Claude und internen Dokumentrollen führen install, upgrade, migrate und Übernahme keine nicht ausgewählten externen Schreib-, Lösch- oder Wiederherstellungsänderungen durch, auch nicht in `.claude/`, `.mcp.json` oder `CLAUDE.md`. Explizite externe Dokumentrollen, andere ausgewählte Engines und ein separat angefordertes `install-tools` erlauben nur ihre jeweiligen Ausnahmen. Alte Eigentumsbelege oder Transaktionsjournale autorisieren keine externe Bereinigung; ein solcher Moduswechsel wird vor dem Schreiben abgelehnt und erfordert eine geprüfte Bereinigung im bisherigen Modus. Die normale Integration mit `project-file` und `session-hook` mit `.claude/settings.json` behält ihre native Bereitstellung.
 
-Die Entwicklungsabnahme für 2.1.0 erfolgte unter Windows mit Node 24. Linux, macOS und Node 20/22 waren nicht abgedeckt; eine konfigurierte CI-Matrix belegt keine Ausführung. [Prüfumfang](docs/PROJECT_SETTINGS.md#validation-scope) beschreibt die Grenzen bei Dateisystem und Abdeckung.
+Starten Sie mit `claude --settings .0-code/claude/settings.json` oder einem geprüften Launcher, der diese Datei übergibt. SessionStart und SubagentStart stellen über `.0-code/AGENT.md` die internen Quellen des Orchestrators und aktivierter Prüfverfahren bereit; native Slash-Befehle werden nicht registriert. Bei `modules.audits: false` fehlen Prüfquellen und Verweise. Sichere Textwerkzeuge können per Verweis bereitstehen; nicht so darstellbare native Ausführungssteuerung und neue MCP-Registrierungen erhalten `unsupported`. Beibehaltene Launcher-, MCP-, system-prompt-Dateien und Einstellungsrichtlinien bleiben erhalten; kompatible Einstellungen erhalten Frameworkeinträge, uninstall stellt Originalwerte wieder her. Normale Sitzungen laden die Datei nicht automatisch. Doctor prüft lokale Hooks, keine Benutzer-, verwalteten oder CLI-Überschreibungen. [Formate, Befehle und Grenzen](docs/PROJECT_SETTINGS.md).
+
+Geprüfte Plattformen, Node-Versionen, Dateisystemgrenzen und Abdeckungsschwellen stehen im [Prüfumfang](docs/PROJECT_SETTINGS.md#validation-scope). Eine konfigurierte CI-Matrix belegt keine Ausführung.
 
 ## Arbeiten und pflegen
 

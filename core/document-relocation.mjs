@@ -98,8 +98,17 @@ function manifestRole(documents, path) {
     throw new Error('Document belongs to ambiguous shared roles; separate their paths before relocation: ' + path);
   return candidates[0][0];
 }
+export function validateRelocationSelection(beforeConfig, proposedConfig, manifest) {
+  const selected=validateManifest(manifest),before=beforeConfig.documents;
+  const selectedRoles=new Map(selected.map(from=>[from,manifestRole(before,from)]));
+  const eligible=Object.entries(before).filter(([role,document])=>document.path===LEGACY_DOCUMENT_DEFAULTS[role].path
+    &&proposedConfig.documents[role].path===document.path&&[...selectedRoles.values()].includes(role));
+  for(const [from,role] of selectedRoles) if(!eligible.some(([candidate])=>candidate===role)&&!['state','templates'].includes(role))
+    throw new Error('Manifest file is outside a legacy standard role: '+from);
+  return {selected,selectedRoles,eligible};
+}
 export function planDocumentRelocation(root, beforeConfig, proposedConfig, manifest) {
-  const selected = validateManifest(manifest), before = beforeConfig.documents;
+  const selected=validateManifest(manifest),before=beforeConfig.documents;
   const cycleLockPaths = runtimePaths(before).map(directory => runtimeFile(directory, '.loop.lock')), statePath = before.state.path;
   const stateSnapshot = fileSnapshot(root, statePath);
   assertStateStopped(stateSnapshot.bytes); assertCycleRelocationStopped(root, cycleLockPaths);
@@ -118,9 +127,7 @@ export function planDocumentRelocation(root, beforeConfig, proposedConfig, manif
       throw new Error('Document manifest does not describe a pending or completed relocation');
     return { config: proposedConfig, moves: [], updates: [], preserved: [], roles: [], preflight, cycleLockPaths };
   }
-  const selectedRoles = new Map(selected.map(from => [from, manifestRole(before, from)]));
-  const eligible = Object.entries(before).filter(([role, document]) => document.path === LEGACY_DOCUMENT_DEFAULTS[role].path
-    && proposedConfig.documents[role].path === document.path && [...selectedRoles.values()].includes(role));
+  const {selectedRoles,eligible}=validateRelocationSelection(beforeConfig,proposedConfig,manifest);
   const roles = eligible.map(([role, document]) => ({ role, from: document.path, to: DOCUMENT_DEFAULTS[role].path }));
   const documents = Object.fromEntries(Object.entries(proposedConfig.documents).map(([role, document]) =>
     [role, { ...document, ...(roles.some(entry => entry.role === role) ? { path: DOCUMENT_DEFAULTS[role].path } : {}) }]));

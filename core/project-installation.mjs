@@ -1,7 +1,7 @@
 // Installation ownership is proved by receipt hashes; original project bytes stay in ignored run/.
 import { existsSync, lstatSync, readFileSync, readdirSync, rmdirSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
-import { InstallationPlan, applyInstallationPlan, fileSnapshot, hashBytes, recoverInstallation } from './installation-transaction.mjs';
+import { InstallationPlan, applyInstallationPlan, fileSnapshot, hashBytes, recoverInstallation, transactionIO } from './installation-transaction.mjs';
 import { CONFIG_PATH, DOCUMENT_ZONE, internalLogDirectories, isDocumentZone, isClaudeInstructionPath, loadProjectConfig, normalizeProjectConfig, resolveProjectPath } from './project-config.mjs';
 import { assembleInstallationBundle, FRAMEWORK_SOURCE } from './installation-bundle.mjs';
 import { scanProject } from './project-inventory.mjs';
@@ -11,9 +11,10 @@ import { planProjectDelivery } from './project-delivery.mjs';
 import { PROJECT_PLUGIN_PATH, PROJECT_PLUGIN_ENTRY } from './backends/project-opencode-plugin.mjs';
 import { addNativeJsonChanges, stripNativeJsonChanges, stripNativeJsonEntries } from '../lib/native-json.mjs';
 import { retryWindowsFileOperation } from '../lib/replace-file.mjs';
-import { planDocumentRelocation, addDocumentRelocation } from './document-relocation.mjs';
+import { planDocumentRelocation, addDocumentRelocation, validateRelocationSelection } from './document-relocation.mjs';
 import { prepareProjectAdoption, validateRetainedFiles, addAdoptionBackups } from './project-adoption.mjs';
 import { isDeepStrictEqual } from 'node:util';
+import { isIsolatedClaude, projectAllowedPaths } from './project-write-policy.mjs';
 
 export const RECEIPT_PATH='.0-code/installation.json';
 export const INSTRUCTION_BEGIN='<!-- BEGIN 0-CODE -->';
@@ -25,6 +26,19 @@ export const claudeSettingsPath = config => config.instructions.claude_settings 
 function requireNoClaudeOwnership(config,receipt,originalFiles=new Map()) {
   if(config.instructions.claude==='session-hook'&&(receipt?.files.some(entry=>isClaudeInstructionPath(entry.path))||[...originalFiles.keys()].some(isClaudeInstructionPath))) {
     throw new Error('session-hook never writes CLAUDE.md. First uninstall the previous owned instruction block using project-file mode, then install with the saved config and session-hook mode; cycle documents are preserved.');
+  }
+  const allowedPaths=projectAllowedPaths(config);
+  if(allowedPaths) {
+    const forbidden=[...(receipt?.files||[]).map(entry=>entry.path),...originalFiles.keys()].filter(path=>{
+      try { transactionIO.assertWriteAllowed(allowedPaths,path);return false; } catch(error) {
+        if(!error.message.includes('outside the authorized'))throw error;
+        return true;
+      }
+    });
+    for(const path of receipt?.directories||[]) {
+      try {transactionIO.assertDirectoryAllowed(allowedPaths,path);}catch {forbidden.push(path);}
+    }
+    if(forbidden.length) throw new Error('Isolated Claude cannot clean previous external ownership: '+forbidden.join(', ')+'. First review and uninstall/clean it under the previous mode, then install with the saved config.');
   }
 }
 function readObject(root,path) {
@@ -222,7 +236,7 @@ export function requireOwnership(root,receipt) {
   for(const path of treeFiles(root,'.0-code')) if(!/^\.0-code\/run\//i.test(path)&&!isDocumentZone(path)&&!owned.has(path)) throw new Error(`Unowned file inside installation: ${path}`);
 }
 
-export function planProjectInstallation(root,{config,source=FRAMEWORK_SOURCE,upgrade=false,originalFiles=new Map(),inventory,documentManifest,documentConfig,adoptionManifest}={}) {
+export function planProjectInstallation(root,{config,source=FRAMEWORK_SOURCE,upgrade=false,originalFiles=new Map(),inventory,documentManifest,documentConfig,adoptionManifest,legacyFiles=[]}={}) {
   root=resolve(root);
   if(root===resolve(source)) throw new Error('Install into a target project, not the framework source directory');
   const installedReceipt=readInstallationReceipt(root);
@@ -236,7 +250,8 @@ export function planProjectInstallation(root,{config,source=FRAMEWORK_SOURCE,upg
   if(documentManifest!==undefined && !receipt && !documentConfig) throw new Error('Document relocation requires an existing installation; use migrate');
   if(receipt) requireOwnership(root,receipt);
   else if(existsSync(join(root,'.0-code'))) {
-    const foreign=treeFiles(root,'.0-code').filter(path=>path!==CONFIG_PATH&&!path.startsWith('.0-code/run/')&&!isDocumentZone(path));
+    const foreign=treeFiles(root,'.0-code').filter(path=>path!==CONFIG_PATH&&!path.startsWith('.0-code/run/')&&!isDocumentZone(path)
+      &&!legacyFiles.some(entry=>entry.path===path&&entry.hash===fileSnapshot(root,path).hash));
     if(foreign.length) throw new Error('Existing .0-code files have no installation ownership receipt');
   }
   const existing=receipt?loadProjectConfig({projectDir:root}).config:null;
@@ -273,6 +288,7 @@ export function planProjectInstallation(root,{config,source=FRAMEWORK_SOURCE,upg
   settings.framework_version=bundle.version;
   const project=loadProjectConfig({projectDir:root,config:settings});
   const native=planProjectDelivery(root,settings,bundle,{original:path=>original(path).bytes});
+  if(native.sessionContext) bundle.files.set('AGENT.md',Buffer.concat([bundle.files.get('AGENT.md'),Buffer.from(native.sessionContext)]));
   if(settings.instructions.project_rules?.length) {
     for(const path of settings.instructions.project_rules) if(fileSnapshot(root,path).bytes===null)throw new Error('Configured project rules are missing: '+path);
     bundle.files.set('AGENT.md',Buffer.concat([bundle.files.get('AGENT.md'),Buffer.from('\n## Retained project rules\n\nRead these project-owned files; this generated guide defines current framework behavior:\n'+settings.instructions.project_rules.map(path=>'- '+JSON.stringify(path)).join('\n')+'\n')]));
@@ -282,7 +298,7 @@ export function planProjectInstallation(root,{config,source=FRAMEWORK_SOURCE,upg
   const targets=new Map([...bundle.files].map(([path,bytes])=>['.0-code/'+path,{bytes,
     mode:/^hooks\/(?:run-hook\.cmd|ralph-loop-stop|safety-guard|save-session-log|usage-statusline|project-context)$/.test(path)?0o755:0o644}]));
   targets.set(CONFIG_PATH,{bytes:jsonBytes(settings)});
-  const approvedMcp=native.delivery.tools.filter(tool=>tool.kind==='mcp'&&tool.engine==='claude'
+  const approvedMcp=isIsolatedClaude(settings)?[]:native.delivery.tools.filter(tool=>tool.kind==='mcp'&&tool.engine==='claude'
     &&(tool.status==='delivered'||tool.status==='native'&&tool.compatible)).map(tool=>tool.name);
   for(const [path,target] of externalTargets(root,settings,receipt,approvedMcp,original)) targets.set(path,target);
   for(const [path,target] of native.targets) targets.set(path,target);
@@ -290,7 +306,7 @@ export function planProjectInstallation(root,{config,source=FRAMEWORK_SOURCE,upg
     const budget=project.engineSettings('codex').instructionsMaxBytes;
     if(budget!==undefined&&targets.get('AGENTS.md').bytes.length>budget) throw new Error('Codex project instructions exceed the configured limit');
   }
-  const plan=new InstallationPlan(root),entries=[];
+  const plan=new InstallationPlan(root,{allowedPaths:projectAllowedPaths(settings,{relocation:relocation??adoption})}),entries=[];
   for(const [path,target] of targets) {
     if(isDocumentZone(path)) throw new Error('Framework delivery cannot own project documents');
     const previous=receipt?.files.find(entry=>entry.path===path),snapshot=fileSnapshot(root,path);
@@ -355,9 +371,29 @@ export function planProjectInstallation(root,{config,source=FRAMEWORK_SOURCE,upg
 }
 
 export function installProject(root,options={}) {
-  recoverInstallation(root);
+  recoverProjectInstallation(root,options);
   const prepared=planProjectInstallation(root,options);
   return {...prepared,result:applyInstallationPlan(prepared.plan)};
+}
+export function recoverProjectInstallation(root,{config,documentManifest}={}) {
+  if(fileSnapshot(root,transactionIO.JOURNAL).bytes===null)return recoverInstallation(root);
+  const loaded=loadProjectConfig({projectDir:root}),existing=loaded.config;
+  const settings=normalizeProjectConfig(config??(loaded.installed?existing:{}),
+    {documentDefaults:readInstallationReceipt(root)?existing.documents:undefined});
+  if(!isIsolatedClaude(settings))return recoverInstallation(root,{allowedPaths:null});
+  let before=existing,selection=null;
+  if(documentManifest) {
+    try { selection=validateRelocationSelection(before,settings,documentManifest); }
+    catch(error) {
+      if(!config)throw error;
+      // A crash can already have published the new roles. Only an explicitly supplied
+      // former configuration may authorize recovery through the previous document paths.
+      before=settings;selection=validateRelocationSelection(before,settings,documentManifest);
+    }
+  }
+  const relocation=selection?{files:selection.selected,cycleLockPaths:[...new Set(['.0-code/run',dirname(before.documents.state.path).replaceAll('\\','/')])]
+    .map(directory=>directory==='.'?'.loop.lock':directory+'/.loop.lock')}:undefined;
+  return recoverInstallation(root,{allowedPaths:projectAllowedPaths(settings,{relocation})});
 }
 export function upgradeProject(root,options={}) {
   if(!readInstallationReceipt(root)) throw new Error('No owned installation to upgrade');
@@ -368,7 +404,7 @@ export function planProjectUninstall(root) {
   if(!receipt) throw new Error('No owned installation to remove');
   requireNoClaudeOwnership(loadProjectConfig({projectDir:root}).config,receipt);
   requireOwnership(root,receipt);
-  const plan=new InstallationPlan(root);
+  const plan=new InstallationPlan(root,{allowedPaths:projectAllowedPaths(loadProjectConfig({projectDir:root}).config)});
   for(const entry of [...receipt.files].reverse()) {
     const original=originalSnapshot(root,entry.path,receipt);
     plan.change(entry.path,original.bytes,{overwrite:true,expectedHash:entry.path===CONFIG_PATH?undefined:fileSnapshot(root,entry.path).hash});
@@ -385,6 +421,7 @@ export function uninstallProject(root) {
   recoverInstallation(root);
   const prepared=planProjectUninstall(root),result=applyInstallationPlan(prepared.plan,{removeRuntimeIgnore:true});
   function removeEmptyDirectory(path) {
+    transactionIO.assertDirectoryAllowed(prepared.plan.allowedPaths,path);
     try {retryWindowsFileOperation(()=>rmdirSync(resolveFile(prepared.root,path)),{validate:()=>resolveFile(prepared.root,path)});}
     catch(error) {if(!['ENOENT','ENOTEMPTY','EEXIST'].includes(error.code)) throw error;}
   }

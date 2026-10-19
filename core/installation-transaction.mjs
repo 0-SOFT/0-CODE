@@ -3,7 +3,8 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, chmodSyn
 import { dirname, join, relative, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
-import { resolveProjectPath, projectRelativePath } from './project-config.mjs';
+import { resolveProjectPath, projectRelativePath, loadProjectConfig, CONFIG_PATH } from './project-config.mjs';
+import { projectAllowedPaths } from './project-write-policy.mjs';
 import { replaceFileSync, retryWindowsFileOperation } from '../lib/replace-file.mjs';
 import { enterLoopMutationAt, isPidAlive, ownerState } from './loop-lock.mjs';
 import { assertBeforeImages, clearBeforeImages, isBeforeStoragePath, prepareBeforeImages, readBeforeImage } from './installation-journal-storage.mjs';
@@ -28,7 +29,15 @@ function assertWriteAllowed(paths,path) {
   path=projectRelativePath(path,{allowFramework:true});
   const key=value=>process.platform==='win32'?value.toLowerCase():value;
   if(!paths.some(entry=>key(path)===key(entry.path)||entry.recursive&&key(path).startsWith(key(entry.path)+'/')))
-    throw new Error('Installation path is outside the authorized native locations');
+    throw new Error('Installation path is outside the authorized native locations: '+path);
+}
+function assertDirectoryAllowed(paths,path) {
+  if(paths===null)return;
+  const normalized=projectRelativePath(path,{allowFramework:true});
+  const key=value=>process.platform==='win32'?value.toLowerCase():value;
+  if(!paths.some(entry=>key(normalized)===key(entry.path)||key(entry.path).startsWith(key(normalized)+'/')
+    ||entry.recursive&&key(normalized).startsWith(key(entry.path)+'/')))
+    throw new Error('Installation directory is outside the authorized native locations: '+path);
 }
 
 function snapshotFile(file) {
@@ -97,13 +106,14 @@ export class InstallationPlan {
     return true;
   }
   assertReady() {
-    this.preflight?.();
+    for(const path of this.cycleLockPaths||[])assertWriteAllowed(this.allowedPaths,path);
     if(this.conflicts.length) { const error=new Error('Installation intersections require a decision');error.conflicts=this.conflicts;throw error; }
     for(const entry of this.changes) {
       assertWriteAllowed(this.allowedPaths,entry.path);
       if(this.changes.some(other=>other!==entry && entry.path.startsWith(other.path+'/'))) throw new Error('Installation file paths overlap');
       if(fileSnapshot(this.root,entry.path).hash!==entry.beforeHash) throw new Error(`Installation target changed: ${entry.path}`);
     }
+    this.preflight?.();
   }
   summary() { return this.changes.map(entry=>({path:entry.path,operation:entry.after===null?'remove':entry.before===null?'create':'update'})); }
 }
@@ -317,7 +327,7 @@ function recordStagingConflict(root,journal,error) {
   }
 }
 
-export function recoverInstallation(root) {
+export function recoverInstallation(root,{allowedPaths}={}) {
   root=resolve(root);
   assertNoStagingConflict(root);
   if(existsSync(contained(root,GROUP_JOURNAL)))throw new Error('A coordinated installation requires recovery with all authorized profile roots');
@@ -326,6 +336,12 @@ export function recoverInstallation(root) {
   assertMutationAvailable(root);
   const snapshot=fileSnapshot(root,JOURNAL);
   let journal;try { journal=validJournal(root,JSON.parse(snapshot.bytes.toString('utf8'))); } catch { throw new Error('Invalid installation recovery journal'); }
+  const authorized=normalizeInstallationPaths(allowedPaths===undefined
+    ?fileSnapshot(root,CONFIG_PATH).bytes===null?null:projectAllowedPaths(loadProjectConfig({projectDir:root}).config)
+    :allowedPaths);
+  for(const entry of journal.changes)assertWriteAllowed(authorized,entry.path);
+  for(const path of journal.missingDirectories)assertDirectoryAllowed(authorized,path);
+  for(const path of journal.cycleLockPaths||[])assertWriteAllowed(authorized,path);
   assertJournalStaging(root,journal);
   if(journal.runtimeIgnoreCreated) {
     const ignore=fileSnapshot(root,RUN_IGNORE).bytes;
@@ -409,4 +425,4 @@ function applyGuardedInstallationPlan(plan,{removeRuntimeIgnore=false}={}) {
 export const transactionIO=Object.freeze({contained,missingDirectories,removeEmpty,publish,restoreJournal,validJournal,
   stagingPath,validateStaging,journalStaging,assertStaging,clearStaging,assertJournalStaging,clearJournalStaging,
   assertNoStagingConflict,recordStagingConflict,
-  assertMutationAvailable,releaseDeadLock,acquireMutationLock,releaseMutationLock,assertWriteAllowed,JOURNAL,RUN_IGNORE});
+  assertMutationAvailable,releaseDeadLock,acquireMutationLock,releaseMutationLock,assertWriteAllowed,assertDirectoryAllowed,JOURNAL,RUN_IGNORE});

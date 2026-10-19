@@ -12,6 +12,8 @@ import { resolveCodexLaunch } from './backends/codex.mjs';
 import { doctorUserTools } from './user-installation.mjs';
 import { inspectMcpPrerequisites } from './mcp-prerequisites.mjs';
 import { PROJECT_PLUGIN_ENTRY } from './backends/project-opencode-plugin.mjs';
+import { isIsolatedClaude } from './project-write-policy.mjs';
+import { verifySessionContext } from './project-delivery.mjs';
 const control = command => ({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } });
 export function doctorProject(root, { env = process.env } = {}) {
   const checks = [], warnings = [];
@@ -47,6 +49,8 @@ export function doctorProject(root, { env = process.env } = {}) {
     if(receipt.files.some(entry=>isClaudeInstructionPath(entry.path))) throw new Error('session-hook cannot own CLAUDE.md');
     const settingsPath=claudeSettingsPath(project.config);
     const settings=JSON.parse(readFileSync(join(root,settingsPath),'utf8'));
+    const guide=readFileSync(join(project.frameworkDir,'AGENT.md'),'utf8');
+    if(isIsolatedClaude(project.config))verifySessionContext(root,project.config,receipt.delivery,guide);
     const localFile=join(root,'.claude/settings.local.json');
     const local=existsSync(localFile)?JSON.parse(readFileSync(localFile,'utf8')):{};
     if((local.disableAllHooks??settings.disableAllHooks)===true) throw new Error('Claude hooks are disabled in project settings');
@@ -62,7 +66,7 @@ export function doctorProject(root, { env = process.env } = {}) {
         :runCli('bash',[wrapper,'project-context'],options);
       if(probe.status!==0) throw new Error(`${event} project context failed`);
       const result=JSON.parse(probe.stdout).hookSpecificOutput;
-      if(result?.hookEventName!==event||result.additionalContext!==readFileSync(join(project.frameworkDir,'AGENT.md'),'utf8')) throw new Error(`${event} project context is incomplete`);
+      if(result?.hookEventName!==event||result.additionalContext!==guide) throw new Error(`${event} project context is incomplete`);
     }
     return `Registered SessionStart and SubagentStart wrappers in ${settingsPath} return .0-code/AGENT.md; CLAUDE.md is not owned. User, managed and CLI hook overrides are not evaluated`;
   });
@@ -107,7 +111,8 @@ export function doctorProject(root, { env = process.env } = {}) {
     for(const row of receipt.delivery.tools.filter(row=>row.status==='pending-user'))if(!machine.delivery.tools.some(tool=>tool.id===row.id&&tool.engine===row.engine&&['delivered','reference'].includes(tool.status)))throw new Error('Machine selection does not include '+row.id+' for '+row.engine);
     return 'One independently owned machine toolset verified';
   });
-  if (!receipt.delivery || receipt.delivery.tools.some(row=>row.status==='unsupported')) checks.push({ id: 'native-tools', ok: false, reason: 'Native tool delivery contains unsupported formats' });
+  if (!receipt.delivery || receipt.delivery.tools.some(row=>row.status==='unsupported')) checks.push({ id: 'native-tools', ok: false,
+    reason:'Native tool delivery contains unsupported formats'+(receipt.delivery?': '+receipt.delivery.tools.filter(row=>row.status==='unsupported').map(row=>`${row.id} (${row.engine}): ${row.reason}`).join('; '):'') });
   checks.push(...inspectMcpPrerequisites(root,receipt.delivery,{env}));
   return { ok: checks.every(entry => entry.ok), framework_version: receipt.framework_version, checks, warnings };
 }

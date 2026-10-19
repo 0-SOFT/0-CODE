@@ -4,11 +4,12 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inventorySummary, scanProject } from '../core/project-inventory.mjs';
 import { findProjectRoot, loadProjectConfig } from '../core/project-config.mjs';
-import { installProject, planProjectInstallation, planProjectUninstall, uninstallProject, upgradeProject } from '../core/project-installation.mjs';
+import { planProjectInstallation, planProjectUninstall, uninstallProject, recoverProjectInstallation } from '../core/project-installation.mjs';
 import { doctorProject } from '../core/project-doctor.mjs';
 import { planProjectStart, startProjectCycle } from '../core/project-start.mjs';
 import { planUserInstallation, installUserTools, planUserUninstall, uninstallUserTools, doctorUserTools, recoverUserInstallation } from '../core/user-installation.mjs';
-import { applyInstallationPlan, recoverInstallation } from '../core/installation-transaction.mjs';
+import { applyInstallationPlan } from '../core/installation-transaction.mjs';
+import { isIsolatedClaude } from '../core/project-write-policy.mjs';
 import { applyInstallationGroup } from '../core/installation-group.mjs';
 import { planProjectMigration } from '../core/project-migration.mjs';
 const COMMANDS = ['scan', 'install', 'doctor', 'upgrade', 'uninstall', 'start', 'install-tools', 'uninstall-tools', 'doctor-tools','migrate'];
@@ -109,9 +110,9 @@ export async function main(argv = process.argv.slice(2), write = text => process
       const args = { ...(config !== undefined ? { config } : {}), ...(options.source ? { source: options.source } : {}) };
       if(options.documentManifestFile)args.documentManifest=JSON.parse(readFileSync(options.documentManifestFile,'utf8'));
       if(options.adoptionManifestFile)args.adoptionManifest=JSON.parse(readFileSync(options.adoptionManifestFile,'utf8'));
-      if(!options.dryRun)recoverInstallation(root);
+      if(!options.dryRun)recoverProjectInstallation(root,args);
       prepared=options.command==='migrate'?planProjectMigration(root,args):planProjectInstallation(root,{...args,upgrade:options.command==='upgrade'});
-      if(prepared.config.modules.toolset&&prepared.config.toolset.scope==='user') {
+      if(prepared.config.modules.toolset&&prepared.config.toolset.scope==='user'&&!isIsolatedClaude(prepared.config)) {
         if(!options.dryRun)recoverUserInstallation({...args,config:prepared.config});
         const machine=planUserInstallation({...args,config:prepared.config});
         prepared.machinePlan=machine.plans.flatMap(plan=>plan.summary().map(entry=>({...entry,root:plan.root})));

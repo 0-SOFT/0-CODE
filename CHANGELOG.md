@@ -9,14 +9,24 @@ All notable changes to this project are documented here. The format follows
 > below records what changed and — more usefully — **what was learned**. Where a decision was later
 > reversed, the reversal is listed too: this project treats a disproven assumption as a result.
 
-**Current version: v2.1.0.** Validation for this version is recorded with each change; earlier runs below are historical evidence. Final release acceptance and publication are separate from changing the version in the development branch.
+**Current version: v2.1.1.** Validation for this version is recorded with each change; earlier runs below are historical evidence. Final release acceptance and publication are separate from changing the version in the development branch.
 
-The 2.1.0 public update follows the published **2.0.4**. This changelog also retains
+The 2.1.1 update follows the published **2.1.0**. This changelog also retains
 the cumulative history from **1.21.0**; version 1.21.0 was prepared locally but was not published. Older sections
 record behavior and measurements at the time; current installation instructions
 are in [INTEGRATE](INTEGRATE.md) and [PROJECT_SETTINGS](docs/PROJECT_SETTINGS.md).
 Private development reports, decisions and task documents are excluded; configured
 document roles in installed projects remain part of the product.
+
+---
+
+## [v2.1.1] - 2026-10-19 - Keep isolated Claude delivery inside its session
+
+- Strict session isolation requires both `instructions.claude: session-hook` and `.0-code/claude/settings.json`. Install, upgrade, migrate and adoption no longer create native Claude skills, commands, agents, rules or MCP registrations outside `.0-code/`. The same write boundary covers deletion, legacy cleanup, staging and transaction recovery; old receipts and journals cannot authorize unselected external changes. Conflicting transitions refuse before writes and require reviewed cleanup under the previous mode.
+- Recovery after interrupted document relocation accepts the reviewed pre-operation config only when supplied explicitly with `--config`, alongside the original `--relocate-documents` manifest. This permits recovery after the new internal document paths have already been published, without treating a journal's old config as authority for external changes. Without those explicit inputs, forbidden external recovery still refuses before writes.
+- SessionStart and SubagentStart expose internal orchestrator and enabled audit procedure sources through the generated AGENT catalog. They are instruction references, without native slash-menu registration. Disabling audits removes their sources and references. Safe text tools can use internal references; unsupported native execution controls and new MCP registrations remain explicit diagnostic failures.
+- Strict project lifecycle actions do not install shared machine tools automatically. Explicit external document roles, other selected engines and a separate requested `install-tools` action retain their scoped behavior. Ordinary `project-file` mode and `session-hook` with `.claude/settings.json` retain native delivery. Adopted launcher, MCP, system-prompt, settings policies and documents remain preserved.
+- VERSION, README and all ten translations, INTEGRATE and PROJECT_SETTINGS describe 2.1.1 and the distinction between ordinary project hooks and an explicitly loaded session overlay. Platform and coverage evidence belongs to the [validation scope](docs/PROJECT_SETTINGS.md#validation-scope); publication remains a separate action.
 
 ---
 

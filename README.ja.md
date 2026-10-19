@@ -1,8 +1,8 @@
-<!-- tracks: README.md sha256:6be15af01675 -->
+<!-- tracks: README.md sha256:dc67310727a4 -->
 
 # 0-CODE
 
-**バージョン:** v2.1.0
+**バージョン:** v2.1.1
 
 既存プロジェクトに組み込む **Claude Code、Codex、OpenCode** 向けの自律開発サイクルです。ひとつのサイクル指示に調査、実装、修正、監査、リリース作業を含められます。
 
@@ -16,7 +16,7 @@
 
 ## インストールされるもの
 
-フレームワークのコード、設定、スキーマ、モジュール、テンプレートは **`.0-code/`** に配置します。エンジンには必須のネイティブフック、指示、互換ツールと OpenCode の保護プラグインのみを登録します。既存のコードと文書を保持し、衝突や変更された所有ファイルは書き込み前に報告します。実行時ファイルとバックアップは git 対象外の `.0-code/run/` に置きます。
+フレームワークのコード、設定、スキーマ、モジュール、組み込みテンプレートは **`.0-code/`** に置きます。プロジェクトが所有するサイクル文書は **`.0-code/docs/`**、実行時ファイルとバックアップは Git 対象外の **`.0-code/run/`** に置きます。通常の統合は選択したエンジンに必要なネイティブフック、指示、互換ツール、OpenCode 保護プラグインを追加します。後述する Claude の分離セッションでは、その統合を `.0-code/` 内に保持します。既存のコードと文書を保持し、衝突や変更された所有ファイルは書き込み前に報告します。
 
 設定の唯一の参照先は [PROJECT_SETTINGS](docs/PROJECT_SETTINGS.md) です。標準の文書を採用する、個別の役割を変える、既存のプロジェクト規約に全役割を対応付けることができます。状態は機械可読のままです。人向け文書は設定言語、エージェント指示は英語を使います。
 
@@ -24,9 +24,9 @@
 
 [公開カタログ](toolset/CATALOG.md)には **五つの標準 MCP：context7、playwright、chrome-devtools、sequential-thinking、memory** が含まれます。npm パッケージは検証済みの SemVer 最低バージョン以上で、名前とエントリーポイントが正しい必要があります。条件を満たす新しいバージョンは保持します。外部 API キーは不要ですが、ブラウザツールには利用可能なブラウザも必要です。登録や doctor の成功だけでは実際の接続を証明しません。非公開のスキル、エージェント、コマンド、ルールの実装ファイルは除外されています。MCP マニフェストの任意のアカウントサービス例は、明示的に設定し認証するまで無効です。
 
-既定は**ユーザーごとに独立した一つのインストール**で、そのユーザーのプロジェクト間で共有します。同じ選択を再インストールしても変更しません。project スコープで別の選択をプロジェクトに固定できます。プロジェクトの削除ではマシンのツールを残し、`uninstall-tools` で別途削除して元のネイティブ設定を復元します。認証はコピーしません。[設定と前提条件](docs/PROJECT_SETTINGS.md)。
+ツールは標準で**ユーザーごとに独立した一つのインストール**を使い、そのユーザーのプロジェクト間で共有します。同じ選択の再インストールでは何も変わりません。project 範囲なら別の選択をプロジェクトに固定できます。分離 Claude の install/upgrade/migrate はユーザーツールを自動インストールしません。明示的に別途依頼した `install-tools` が必要です。プロジェクトを削除してもマシンのツールは残り、`uninstall-tools` が個別に削除して元の設定を復元します。認証情報はコピーしません。[設定と前提条件](docs/PROJECT_SETTINGS.md)。
 
-## 2.1.0 の文書、移行、所有権
+## 2.1.1 の文書、移行、セッション分離
 
 新規インストールでは九つの文書ロールを `.0-code/docs/` に置きます。`STATE.md`、`ROADMAP.md`、`reports/`、`decisions/`、`todo/`、`logs/`、`prompts/`、`prompts/templates/`、`userdocs/` です。永続文書は Git に保存し、セッションログは除外します。ログには `.0-code/run/logs/` も使えますが、永続ロールには実行時領域を使えません。明示的な外部ロールは引き続き有効で、通常の upgrade は既存のパスを保持します。文書は所有権レシートの対象外です。doctor は受け入れ、upgrade は保持し、uninstall は文書とディレクトリを残して実行時ファイルとバックアップを削除します。
 
@@ -34,9 +34,11 @@
 
 レシートのない改変済み `.0-code/` は、確認済み SHA-256 と `replace`/`preserve` を記した `migrate --adopt-manifest <manifest.json>` で受け入れます。保持できるのは正確に列挙した `bin/`、`claude/`、`.0-code/README.md` のプロジェクト拡張のみで、コードは置換して保存します。拡張は編集でき、upgrade/uninstall 後も残ります。不明なファイルやハッシュ不一致は拒否され、受け入れと文書移動は別操作です。生成ガイドの置換前に独自の AGENT ルールを文書に保存し、`instructions.project_rules` で参照します。
 
-Claude は `instructions.claude: session-hook` で `CLAUDE.md` に書き込まずに動作できます。`instructions.claude_settings: .0-code/claude/settings.json` を指定するとセッション設定を使え、ランチャー、MCP、system-prompt を保持できます。`claude --settings .0-code/claude/settings.json` で起動してください。通常のセッションは自動で読み込みません。互換設定はポリシーを保持し、外部の Stop/guard フックは検討が必要です。Uninstall は元の設定に戻します。Doctor はローカルフックを検証しますが、ユーザー・managed・CLI の上書きは評価しません。[形式、コマンド、制限](docs/PROJECT_SETTINGS.md)。
+Claude の分離セッションには `instructions.claude: session-hook` と `instructions.claude_settings: .0-code/claude/settings.json` の両方が必要です。Claude のみを選び、文書ロールを内部に置いた場合、install、upgrade、migrate、既存インストールの引き継ぎは、`.claude/`、`.mcp.json`、`CLAUDE.md` を含む未選択の外部書き込み、削除、復旧変更を行いません。明示した外部文書ロール、別途選択したエンジン、個別に依頼した `install-tools` は、それぞれの範囲だけの例外です。古い所有権記録やトランザクションログは外部の整理を許可しません。整理が必要な切り替えは書き込み前に拒否され、以前のモードで確認した整理が必要です。通常の `project-file` と `.claude/settings.json` を使う `session-hook` はネイティブへの配置を維持します。
 
-2.1.0 の開発時の受け入れ検証は Windows と Node 24 で実施しました。Linux、macOS、Node 20/22 は対象外で、CI マトリクスの設定だけでは実行の証拠になりません。ファイルシステムとカバレッジの制限は[検証範囲](docs/PROJECT_SETTINGS.md#validation-scope)を参照してください。
+`claude --settings .0-code/claude/settings.json` またはこのファイルを渡す確認済みランチャーで起動します。SessionStart と SubagentStart は `.0-code/AGENT.md` を通して、内部オーケストレーターと有効な監査手順のソースを参照可能にします。ネイティブのスラッシュコマンドは登録しません。`modules.audits: false` なら監査ソースも参照もありません。安全なテキストツールは参照できますが、この方法で提供できないネイティブ実行制御や新しい MCP 登録は `unsupported` と報告します。保持したランチャー、MCP、system-prompt、設定ポリシーは残り、互換設定にはフレームワーク項目を追加し、uninstall で元の値を復元します。通常のセッションはこのファイルを自動では読み込みません。Doctor はローカルフックを検証しますが、ユーザー、管理者、CLI による上書きは評価しません。[形式、コマンド、制限](docs/PROJECT_SETTINGS.md)。
+
+実測したプラットフォーム、Node バージョン、ファイルシステムの制限、カバレッジ基準は[検証範囲](docs/PROJECT_SETTINGS.md#validation-scope)に記録しています。CI マトリクスの設定だけでは実行の証拠になりません。
 
 ## 作業と保守
 

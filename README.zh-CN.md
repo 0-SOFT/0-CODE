@@ -1,8 +1,8 @@
-<!-- tracks: README.md sha256:6be15af01675 -->
+<!-- tracks: README.md sha256:dc67310727a4 -->
 
 # 0-CODE
 
-**版本:** v2.1.0
+**版本:** v2.1.1
 
 适用于 **Claude Code、Codex 和 OpenCode** 的自主开发循环，可集成到现有项目。一个循环提示词可以涵盖研究、实现、修复、审计和版本发布。
 
@@ -16,7 +16,7 @@
 
 ## 安装内容
 
-框架代码、配置、模式、模块和模板均位于 **`.0-code/`**。引擎只获得必需的原生钩子、指令、兼容工具条目及 OpenCode 防护插件。保留已有代码和文档；冲突及被修改的框架文件在写入之前报告。运行文件和备份放在 git 忽略的 `.0-code/run/` 中。
+框架代码、配置、模式、模块和内置模板位于 **`.0-code/`**。项目拥有的周期文档位于 **`.0-code/docs/`**；运行文件和备份位于 Git 忽略的 **`.0-code/run/`**。普通项目集成为所选引擎添加必要的原生钩子、指令、兼容工具和 OpenCode 防护插件；下述隔离 Claude 会话将其集成保留在 `.0-code/` 内。现有代码和文档会被保留，冲突和已修改的受管理文件会在写入前报告。
 
 唯一的配置参考是 [PROJECT_SETTINGS](docs/PROJECT_SETTINGS.md)。可采用默认文档、覆盖单个角色，或将所有角色映射到项目既有约定。状态仍是机器可读文档。面向人的文档使用配置语言，智能体指令保持英文。
 
@@ -24,9 +24,9 @@
 
 [公共工具目录](toolset/CATALOG.md)包含 **五个默认 MCP：context7、playwright、chrome-devtools、sequential-thinking 和 memory**。npm 包版本须不低于经过验证的 SemVer 下限，且包名和入口正确；保留符合要求的较新版本。无需外部 API 密钥；浏览器工具还需要可用浏览器。注册成功和 doctor 通过不代表已建立实际连接。私有技能、智能体、命令和规则的实现文件不包含在内。MCP 清单中的可选账户示例只有明确配置并授权后才启用。
 
-默认采用**每用户一份独立安装**，供其项目共享。重复安装相同选择不会修改任何文件。project 范围可在单个项目固定不同选择。卸载项目保留机器工具；`uninstall-tools` 单独卸载它们并恢复原有原生配置。绝不复制认证文件。[配置与前置条件](docs/PROJECT_SETTINGS.md)。
+工具默认采用**每个用户一份独立安装**，供该用户的所有项目共享。重复相同选择不会改变任何内容。project 范围可为项目固定另一套选择。隔离 Claude 的 install/upgrade/migrate 不会自动安装用户工具，必须单独明确请求 `install-tools`。卸载项目会保留机器工具；`uninstall-tools` 单独移除这些工具并恢复其原生设置。身份验证不会被复制。参见[配置与前置条件](docs/PROJECT_SETTINGS.md)。
 
-## 2.1.0 的文档、迁移与所有权
+## 2.1.1 的文档、迁移与会话隔离
 
 新安装将九个文档角色放在 `.0-code/docs/`：`STATE.md`、`ROADMAP.md`、`reports/`、`decisions/`、`todo/`、`logs/`、`prompts/`、`prompts/templates/` 和 `userdocs/`。持久文档应提交到 Git；会话日志被忽略。日志也可放在 `.0-code/run/logs/`，持久角色不能使用运行时目录。显式外部角色仍受支持，普通 upgrade 保持现有路径。文档不属于所有权收据：doctor 接受它们，upgrade 保留它们，uninstall 保留文档及目录并删除运行时文件和备份。
 
@@ -34,9 +34,11 @@
 
 没有收据的定制 `.0-code/` 安装可通过 `migrate --adopt-manifest <manifest.json>` 接纳，使用审核过的 SHA-256 和 `replace`/`preserve` 操作。只能保留精确列出的 `bin/`、`claude/` 和 `.0-code/README.md` 项目扩展；框架代码会替换并归档。扩展仍可编辑，upgrade/uninstall 会保留它们。未知文件或哈希不符会导致拒绝；接纳与文档迁移必须分开。替换生成的指引前，将自定义 AGENT 规则保存为文档，并通过 `instructions.project_rules` 引用。
 
-Claude 可使用 `instructions.claude: session-hook` 而不写入 `CLAUDE.md`。设置 `instructions.claude_settings: .0-code/claude/settings.json` 可使用会话配置，保留启动器、MCP 和 system-prompt 文件。通过 `claude --settings .0-code/claude/settings.json` 启动；普通会话不会自动加载该文件。兼容设置保留原策略；外来 Stop/guard 钩子需要审核。Uninstall 恢复原设置。Doctor 检查本地钩子，不评估用户、managed 或 CLI 覆盖。[格式、命令和限制](docs/PROJECT_SETTINGS.md)。
+Claude 隔离会话必须同时设置 `instructions.claude: session-hook` 和 `instructions.claude_settings: .0-code/claude/settings.json`。仅选择 Claude 且文档角色全部位于内部时，install、upgrade、migrate 和接管安装不会执行未经选择的外部写入、删除或恢复修改，包括 `.claude/`、`.mcp.json` 和 `CLAUDE.md`。明确配置的外部文档角色、其他所选引擎和单独请求的 `install-tools` 仅授权各自范围内的例外。旧所有权收据或事务日志不授权外部清理；需要此类清理的模式切换会在写入前拒绝，须先在原模式下审核并清理。普通 `project-file` 以及使用 `.claude/settings.json` 的 `session-hook` 保留原生交付行为。
 
-2.1.0 的开发验收在 Windows 和 Node 24 上完成，未覆盖 Linux、macOS 或 Node 20/22；配置了 CI 矩阵并不证明已经执行。文件系统和覆盖率限制见[验证范围](docs/PROJECT_SETTINGS.md#validation-scope)。
+使用 `claude --settings .0-code/claude/settings.json` 或传入此覆盖文件的已审核启动器。SessionStart 和 SubagentStart 通过 `.0-code/AGENT.md` 提供内部编排器和已启用审计流程的源文件引用，不注册原生斜杠命令。设置 `modules.audits: false` 时不提供审计源文件或引用。安全的文本工具可通过引用使用；无法以此方式交付的原生执行控制和新增 MCP 注册会标为 `unsupported`。保留的启动器、MCP、system-prompt 和设置策略仍然保留；兼容设置会加入框架条目，卸载时恢复原值。普通会话不会自动加载该覆盖文件。Doctor 检查本地钩子，不评估用户、受管理配置或 CLI 覆盖。参见[格式、命令和限制](docs/PROJECT_SETTINGS.md)。
+
+已测平台、Node 版本、文件系统限制和覆盖率门槛记录在[验证范围](docs/PROJECT_SETTINGS.md#validation-scope)中。配置了 CI 矩阵并不证明已执行验证。
 
 ## 使用与维护
 

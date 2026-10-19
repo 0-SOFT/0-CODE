@@ -4,6 +4,7 @@ import { readMcpReference } from './mcp-reference.mjs';
 import { hashBytes } from './installation-transaction.mjs';
 import { addNativeJsonEntries } from '../lib/native-json.mjs';
 import { codexMcpToml } from './backends/codex-mcp.mjs';
+import { isIsolatedClaude } from './project-write-policy.mjs';
 export function publicHttpEntry(engine,server) {
   // The selected manifest is secret-free. Native HTTP retains OAuth and GET/SSE support.
   if(engine==='claude')return {type:'http',url:server.url,...(Object.keys(server.headers||{}).length?{headers:server.headers}:{})};
@@ -36,6 +37,9 @@ export function planMcpDelivery(root,config,bundle,{original,targets}) {
     for(const engine of config.engines) {
       const row={id:tool.id,kind:'mcp',name,engine,origin,source:reference.path};
       if(origin==='project'&&tool.native.includes(engine)){rows.push({...row,status:'native',compatible:Boolean(parsed)});continue;}
+      if(engine==='claude'&&isIsolatedClaude(config)) {
+        rows.push({...row,status:'unsupported',reason:'Session context cannot register MCP servers; explicit launcher integration is required'});continue;
+      }
       if(project.some(entry=>entry.name===name&&entry.native.includes(engine))){rows.push({...row,status:'overridden'});continue;}
       if(!parsed||!/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(name)||['__proto__','constructor','prototype'].includes(name)){
         rows.push({...row,status:'unsupported',reason:'MCP source needs native transport, execution controls or account setup'});continue;
